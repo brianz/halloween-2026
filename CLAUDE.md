@@ -47,6 +47,7 @@ password the kid brings to a treasure chest for candy.
 | `llm_providers.py` | Provider interface; Bedrock Converse (boto3) impl. ElevenLabs has no standalone text API — checked 2026-09-03 |
 | `temporal_worker.py` | Worker process (workflow + activity host) |
 | `brain_server_sketch.py` | Bridge sketch: ElevenLabs callbacks → Temporal client; `_smoke_test()` at bottom |
+| `voice_console.py` | Localhost browser voice-test console: mic WAV → Scribe ASR → workflow → TTS (custom voice); FastAPI, key stays server-side |
 | `pirate-agent.py` | Legacy hosted-ElevenLabs-agent version; kept for reference only |
 | `test_pirate_workflow.py` | Workflow tests via Temporal time-skipping test env, mocked activities |
 
@@ -58,6 +59,9 @@ password the kid brings to a treasure chest for candy.
 | `PIRATE_LLM_PROVIDER` | `bedrock` | Provider selection (only `bedrock` exists) |
 | `PIRATE_BEDROCK_MODEL_ID` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Model override. Must be an inference-profile ID (`us.`-prefixed), not a raw foundation-model ID |
 | `PIRATE_BEDROCK_REGION` | `us-west-2` | Region override |
+| `PIRATE_VOICE_ID` | `TG2O4Qh067u8gMkJrjhR` (Barnaby custom voice) | Voice-test console TTS voice |
+| `PIRATE_TTS_MODEL` | `eleven_flash_v2_5` | Voice-test console TTS model (low latency) |
+| `PIRATE_ASR_MODEL` | `scribe_v1` | Voice-test console ASR model |
 | `ELEVEN_LABS_API_KEY` | — | ElevenLabs ASR/TTS side (not needed for the Temporal/Bedrock smoke test) |
 | `ELEVEN_LABS_AGENT_KEY_ID` | — | Legacy `pirate-agent.py` only |
 
@@ -65,9 +69,24 @@ Unit tests (`pytest`) mock the Activity and need **no AWS credentials**.
 
 ## Commands
 
+A `justfile` wraps everything (requires `just`, `brew install just`):
+
+```bash
+just deps       # install Python deps into .venv
+just test       # unit tests (no AWS needed)
+just smoke      # text-only end-to-end vs real Bedrock (no ElevenLabs)
+just dev        # temporal dev server + worker + voice console, one command
+just stop       # kill everything `just dev` started
+just temporal   # just the dev server      (localhost:7233, UI at :8233)
+just worker     # just the worker          (real Bedrock, brianz-admin profile)
+just console    # just the voice console   (http://127.0.0.1:8123)
+```
+
+Raw equivalents:
+
 ```bash
 # deps (project venv at .venv)
-uv pip install --python .venv/bin/python temporalio boto3 pytest pytest-asyncio
+uv pip install --python .venv/bin/python temporalio boto3 pytest pytest-asyncio fastapi "uvicorn[standard]" python-multipart httpx
 
 # unit tests (no AWS needed)
 .venv/bin/python -m pytest test_pirate_workflow.py
@@ -76,6 +95,11 @@ uv pip install --python .venv/bin/python temporalio boto3 pytest pytest-asyncio
 temporal server start-dev                              # localhost:7233, UI at :8233
 PIRATE_AWS_PROFILE=brianz-admin .venv/bin/python temporal_worker.py
 PIRATE_AWS_PROFILE=brianz-admin .venv/bin/python brain_server_sketch.py
+
+# voice turn-testing with real mic + custom-voice TTS (browser):
+.venv/bin/python -m uvicorn voice_console:app --host 127.0.0.1 --port 8123
+# then open http://127.0.0.1:8123 — needs ELEVEN_LABS_API_KEY in the env.
+# Port 8000 is taken on this machine by an unrelated project; use 8123.
 ```
 
 ## Gotchas learned the hard way
