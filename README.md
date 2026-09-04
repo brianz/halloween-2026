@@ -1,162 +1,134 @@
 # Haunted Pirates — Captain Barnaby Bones
 
 A Halloween kiosk game. Kids walk up and talk to **Captain Barnaby
-Bones**, a friendly skeleton pirate. He greets them, asks their name, and
-plays a password guessing game — one progressively-easier clue per turn,
-up to 4 clues. If the kid guesses the password at any point, he reveals
-it immediately and celebrates; otherwise he reveals it after the 4th
-clue. The kid brings the password to a nearby treasure chest to claim
-candy.
-
-Why it's built this way: an earlier version used a hosted LLM voice
-agent and kept losing track of state mid-conversation. Now **ElevenLabs
-does audio only (ASR + TTS via their Speech Engine)**, and a **Temporal
-workflow owns every piece of game state** — which password, which turn,
-whether we're done — so it's deterministic, crash-resumable, and
-debuggable in a live UI. The LLM is only ever a *wordsmith*: the workflow
-hands it a structured "clue budget" ("you may hint at the first letter",
-"reveal now") and it turns that into one funny pirate line.
+Bones**, a friendly skeleton pirate (a custom ElevenLabs voice). He greets
+them, asks their name, and plays a password guessing game — a
+progressively-easier clue each turn. If the kid guesses the password at
+any point, he reveals it immediately and celebrates; otherwise he reveals
+it after the last clue. The kid brings the password to a nearby treasure
+chest to claim candy.
 
 ## How it works
 
+The whole thing runs on the **ElevenLabs hosted Conversational AI agent**
+(realtime streaming ASR + TTS, interruption handling, the custom Captain
+voice, `eleven_v3_conversational` TTS with audio tags like `[laughs]`,
+Claude Haiku as the LLM) — but **the kiosk script owns the game logic**:
+
+- `pirate_kiosk.py` picks a random password locally, then starts one
+  conversation per kid: **one process = one kid = fresh state by
+  construction**. No session-memory problems, nothing to clean up between
+  kids — run the script again.
+- The full system prompt lives in `pirate_prompt.txt` (in this repo, not
+  buried in the ElevenLabs dashboard) and is injected per session via the
+  **system-prompt override**. The password itself goes in as a **dynamic
+  variable**; turn counting uses the platform's built-in
+  `system__agent_turns` counter, so the LLM never has to keep count.
+- The agent calls the **`check_guess` client tool** every turn; the
+  deterministic whole-word password match runs locally in the kiosk
+  script. A correct guess short-circuits straight to the reveal — the LLM
+  can't mess up that decision because it doesn't make it.
+- The **ASR keywords override** passes the password pool each session, so
+  a mumbled "anchor" still transcribes reliably.
+
 ```
-kid speaks ──▶ ElevenLabs ASR ──▶ brain server ──▶ Temporal update
-                                                     (submit_utterance)
-                                                          │
-              workflow decides clue budget (deterministic)
-                                                          │
-                                              Activity: LLM call
-                                            (Bedrock, 4s timeout)
-                                                          │
-                    leak-check the output ◀───────────────┘
-                    (password substring / reversed / spelled-out?)
-                          │                          │
-                       clean: speak it          leak/timeout/error:
-                                                 static template instead
-                                                          │
-kid hears ◀── ElevenLabs TTS ◀── brain server ◀───────────┘
+       ┌────────────── ElevenLabs cloud ──────────────┐
+       │  realtime ASR ─▶ Claude Haiku ─▶ v3 TTS      │
+       │      (custom Captain voice, audio tags)      │
+       └──────┬───────────────────────────▲───────────┘
+              │ transcripts              │ spoken lines
+       ┌──────▼───────────────────────────┴───────────┐
+       │ pirate_kiosk.py (laptop)                     │
+       │  • picks password (random.choice)            │
+       │  • injects prompt + password per session     │
+       │  • check_guess client tool (local, exact)    │
+       │  • mic + speakers                            │
+       └──────────────────────────────────────────────┘
 ```
 
-**Guarantees:**
+## Running it on Halloween
 
-- The password is chosen once per conversation with `workflow.random()`
-  — replay-safe, so a crashed worker picks the *same* password on resume.
-- The LLM can only say what the clue budget allows. Its output is checked
-  (case-insensitive substring, reversed, spelled-out letter-by-letter)
-  before anyone hears it; any leak, timeout, or error falls back to a
-  canned template. The kiosk never hangs or goes silent.
-- The child's utterance is checked every turn for a correct guess
-  (whole-word match against the password); the game reveals immediately
-  when that happens instead of forcing the remaining clue turns.
-- Conversation history and an optional kid's name live in workflow state
-  and are passed to each LLM call for continuity and personalization. The
-  name comes from the child's reply to the opening greeting's name-ask
-  (`greet()`), best-effort extracted — no name if they don't give a clean
-  one.
+You'll run this from your laptop with a mic and speakers (or headphones
+to avoid the mic picking up the Captain's own voice).
 
-## Running locally
+### One-time setup (already done — skip this unless re-provisioning)
 
-### 1. Dependencies
+1. An ElevenLabs API key with **ElevenAgents: Read + Write** permission
+   (created in the ElevenLabs dashboard → API keys). No other endpoint
+   permissions are needed.
+2. The "Ghost Pirate Captain" agent exists in your ElevenLabs workspace
+   (id in `ELEVEN_LABS_AGENT_KEY_ID`) with the custom voice
+   (`TG2O4Qh067u8gMkJrjhR`) and `eleven_v3_conversational` TTS model.
+3. Agent security overrides (system prompt, first message, ASR keywords)
+   and the `check_guess` client tool are configured — this was done via
+   the API; see CLAUDE.md "One-time agent setup" for the exact calls.
 
-Requires Python 3.12+ (venv is at `.venv`) and `uv`:
+### Every time (deps + env)
 
 ```bash
-uv pip install --python .venv/bin/python temporalio boto3 pytest pytest-asyncio
+brew install just portaudio   # once, if not already installed
+uv sync                       # installs elevenlabs[pyaudio] into .venv
 ```
 
-Temporal itself (install once): `brew install temporal`
-(or see https://temporal.io/setup/install-temporal-cli)
-
-### 2. Temporal server (terminal 1)
+Environment (e.g. via direnv in `.envrc`):
 
 ```bash
-temporal server start-dev
+export ELEVEN_LABS_API_KEY=...        # key with ElevenAgents read+write
+export ELEVEN_LABS_AGENT_KEY_ID=agent_5401m084pnhxf0z8bdyzj8depdes
 ```
 
-Gives you `localhost:7233` (API) and a live workflow UI at
-http://localhost:8233 — great for watching clue progression in real time.
-
-### 3. Worker (terminal 2)
+### Per kid
 
 ```bash
-PIRATE_AWS_PROFILE=brianz-admin .venv/bin/python temporal_worker.py
+just kiosk          # or: .venv/bin/python pirate_kiosk.py
 ```
 
-The worker hosts both the workflow and the LLM Activity.
+- The script picks a secret password and prints it to your terminal
+  (`🗡 This kid's password: Gold (ssh, don't tell)`) — glance at it so you
+  can help a stuck kid, but keep it away from small eyes.
+- The Captain greets the kid through your speakers and listens on your
+  mic. Talk normally; he handles interruptions.
+- The terminal shows the live transcript (`☠ Captain:` / `🧒 Kid:` lines)
+  and every `check_guess` call.
+- When the kid walks off: **Ctrl-C**. Run `just kiosk` again for the next
+  kid — new password, fresh conversation, nothing to reset.
 
-### 4. Smoke test (terminal 3) — no ElevenLabs needed
+**Troubleshooting on the night:**
 
-```bash
-PIRATE_AWS_PROFILE=brianz-admin .venv/bin/python brain_server_sketch.py
-```
+- No mic/speaker audio → check macOS Sound settings; the script uses the
+  system default devices. Grant mic permission to your terminal app if
+  prompted.
+- `ImportError: pyaudio` → `brew install portaudio && uv sync`.
+- 401/403 from ElevenLabs → the API key lost ElevenAgents Read+Write, or
+  `ELEVEN_LABS_API_KEY` isn't exported in this shell.
+- The internet is a hard dependency on the night (the agent runs in
+  ElevenLabs' cloud). If wifi dies, the game is down — have a bowl of
+  candy as the manual fallback.
 
-Simulates a full conversation through the real stack (Temporal + Bedrock)
-and prints the greeting plus each pirate line. Example output:
+## Tuning the game
 
-```
-[Cheerfully] Ahoy there, me young buccaneer! Welcome to me spooky ship — what be yer name, friend?
-Ahoy there, Billy! [Chuckles] What I be thinkin' of makes a pirate's heart go thump-thump — can ye guess?
-turn 2: Arrr, Billy, here be a hint: ye'd find it deep in the briny sea …
-turn 3: The word starts with the letter 'T', matey!
-turn 4: One more nudge... it be just one word long!
-turn 5: Arrr, Billy, ye've got it — the answer be Treasure! Ye be a true pirate now!
-```
-
-Every clue turn should be freshly worded (LLM), escalate in specificity,
-use the captured name where it fits, and never contain the password
-before the reveal turn. If the child's simulated utterance ever contains
-the real password, the game ends immediately with a `correct_guess`
-celebration instead of running the remaining turns — the smoke test's
-generic filler utterances won't trigger this, but see
-`test_correct_guess_ends_game_early` in the test suite for a scripted
-example. If Bedrock is slow or down you'll see the static templates
-instead — the game still completes.
-
-### 5. Unit tests — no AWS credentials needed
-
-```bash
-.venv/bin/python -m pytest test_pirate_workflow.py
-```
-
-The Activity is mocked, so tests cover the safety logic offline:
-password-leak fallback, timeout fallback (with wall-clock bounds),
-exception fallback, happy-path passthrough, history/name propagation,
-and the leak checker's detection variants.
-
-### Wiring up the real kiosk
-
-`brain_server_sketch.py` shows the two callbacks to slot into ElevenLabs
-Speech Engine's `on_transcript` hook (see their Speech Engine cookbook
-for the transport-specific wiring): start one workflow per session
-(`on_session_start`), then one `submit_utterance` update per finished
-transcript and TTS the returned `line` verbatim.
-
-## Environment variables
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PIRATE_AWS_PROFILE` | boto3 default chain | AWS **profile name** for Bedrock. **Required on machines where the default profile has no credentials** (e.g. this one — use `brianz-admin`). Alternative: export `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN` or any boto3-supported credential source |
-| `PIRATE_LLM_PROVIDER` | `bedrock` | LLM provider (`bedrock` is currently the only implementation) |
-| `PIRATE_BEDROCK_MODEL_ID` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Bedrock model. Must be an inference-profile ID (`us.`-prefixed) — raw foundation-model IDs don't support on-demand invocation anymore |
-| `PIRATE_BEDROCK_REGION` | `us-west-2` | Bedrock region |
-| `ELEVEN_LABS_API_KEY` | — | ElevenLabs ASR/TTS (only for the live kiosk, not the smoke test) |
-
-The AWS account needs Claude model access enabled in Bedrock
-(us-west-2 has `us.anthropic.claude-haiku-4-5-20251001-v1:0` enabled).
-No LLM-related env vars are needed for `pytest`.
+- **Persona, clue ladder, reveal rules, audio tags** → `pirate_prompt.txt`
+  (the single source of truth for agent behavior; takes effect on the
+  next `just kiosk` run — no dashboard edits needed).
+- **Password pool** → `PASSWORD_POOL` at the top of `pirate_kiosk.py`.
+  Keep it in sync with nothing else — the ASR keywords are derived from
+  it automatically.
+- **Opening line** → `FIRST_MESSAGE` in `pirate_kiosk.py`.
 
 ## Project layout
 
 | File | Role |
 | --- | --- |
-| `temporal_workflows.py` | The `PirateConversation` workflow — state, clue budgets, leak check, static fallbacks |
-| `pirate_activities.py` | The `generate_pirate_line` Activity, `ClueRequest`, clue-level instructions, and the Captain's persona prompt |
-| `llm_providers.py` | LLM provider interface + Bedrock Converse implementation |
-| `temporal_worker.py` | Worker process hosting the workflow + activity |
-| `brain_server_sketch.py` | ElevenLabs ↔ Temporal bridge sketch, plus the manual smoke test |
-| `test_pirate_workflow.py` | Workflow tests (Temporal time-skipping test environment, mocked Activity) |
-| `pirate-agent.py` | Legacy hosted-ElevenLabs-agent version, kept for reference |
+| `pirate_kiosk.py` | One kid's session: pick password, start the Conversation with overrides + ASR keywords, register `check_guess`, print the transcript |
+| `pirate_prompt.txt` | The full system prompt: persona, clue ladder, reveal rules, audio-tag whitelist |
+| `CLAUDE.md` | Architecture notes and gotchas (for AI assistants working on this repo) |
 
-Password pool and clue templates live at the top of
-`temporal_workflows.py`; tune the Captain's personality in
-`pirate_activities.py` (`SYSTEM_PROMPT` and `CLUE_LEVEL_INSTRUCTIONS`).
+## History
+
+Earlier iterations are gone but worth a line: a hosted-agent version
+abandoned because the no-code console made the agent "simplistic" (the
+SDK fixes that — which is what we use now); then a Temporal-workflow
+version with local batch ASR → Bedrock → batch TTS, retired because each
+turn cost seconds of serial round-trips. The current design keeps the
+hosted agent's voice and latency but owns the game logic in the kiosk
+script.
