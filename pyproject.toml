@@ -1,21 +1,10 @@
 [project]
 name = "halloween-pirates"
-version = "0.1.0"
-description = "Captain Barnaby Bones voice password game — Temporal workflow state + ElevenLabs ASR/TTS + Bedrock LLM clue wording"
+version = "0.2.0"
+description = "Captain Barnaby Bones voice password game — ElevenLabs hosted agent + local kiosk harness"
 requires-python = ">=3.12"
 dependencies = [
-    "temporalio>=1.32.0",
-    "boto3>=1.40",
-    "fastapi>=0.116",
-    "uvicorn[standard]>=0.35",
-    "python-multipart>=0.0.20",
-    "httpx>=0.28",
-]
-
-[dependency-groups]
-dev = [
-    "pytest>=9",
-    "pytest-asyncio>=1.4",
+    "elevenlabs[pyaudio]>=2.66",
 ]
 
 [tool.pytest.ini_options]

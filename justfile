@@ -1,5 +1,5 @@
 # Haunted Pirates — Captain Barnaby Bones
-# `just` recipes for dev, test, and the night-of kiosk.
+# `just` recipes for the ElevenLabs hosted-agent kiosk.
 # Requires `just` (brew install just) and the project venv at .venv.
 
 default: list
@@ -14,49 +14,9 @@ list:
 deps:
     uv sync
 
-# ---- tests -----------------------------------------------------------------
+# ---- the kiosk -------------------------------------------------------------
 
-# Run unit tests (mocked activities — no AWS needed)
-test:
-    .venv/bin/python -m pytest test_pirate_workflow.py
-
-# ---- individual services ---------------------------------------------------
-
-# Start the local Temporal dev server (localhost:7233, UI at :8233)
-temporal:
-    temporal server start-dev
-
-# Start the Temporal worker (real Bedrock calls — uses brianz-admin profile)
-worker:
-    PIRATE_AWS_PROFILE=brianz-admin .venv/bin/python temporal_worker.py
-
-# Text-only end-to-end smoke test (no ElevenLabs needed, prints 6 lines to stdout)
-smoke:
-    PIRATE_AWS_PROFILE=brianz-admin .venv/bin/python brain_server_sketch.py
-
-# Browser voice-test console — mic in, custom-voice TTS out.
-# Needs ELEVEN_LABS_API_KEY in the environment (direnv handles it).
-# Open http://127.0.0.1:8123 (8000 is taken by an unrelated project).
-console:
-    .venv/bin/python -m uvicorn voice_console:app --host 127.0.0.1 --port 8123
-
-# ---- combos ----------------------------------------------------------------
-
-# Everything for browser voice testing in one command.
-# Starts the temporal dev server, waits for it, then worker + console.
-# Ctrl-C stops the foreground console; `just stop` kills the rest.
-dev:
-    @echo "Starting temporal dev server, worker, and voice console…"
-    @echo "Open http://127.0.0.1:8123 once all three are up."
-    just --justfile '{{ justfile() }}' temporal >/dev/null 2>&1 &
-    @sleep 2
-    just --justfile '{{ justfile() }}' worker &
-    just --justfile '{{ justfile() }}' console
-
-# ---- cleanup ----------------------------------------------------------------
-
-# Kill the background dev processes started by `just dev`
-stop:
-    @-pkill -f "temporal server start-dev" && echo "temporal stopped" || echo "temporal not running"
-    @-pkill -f "temporal_worker.py" && echo "worker stopped" || echo "worker not running"
-    @-pkill -f "voice_console:app" && echo "console stopped" || echo "console not running"
+# One kid's session: picks a password, talks to the Captain (mic + speakers),
+# Ctrl-C when the kid walks off. Run again for the next kid.
+kiosk:
+    .venv/bin/python pirate_kiosk.py
