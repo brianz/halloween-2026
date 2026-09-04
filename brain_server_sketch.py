@@ -35,7 +35,9 @@ async def on_session_start(session_id: str) -> str:
     """
     Call this once when a new ElevenLabs Speech Engine session opens
     (i.e. a new kid steps up and the push-to-talk kiosk starts a session).
-    Starts exactly one workflow per conversation, keyed by session_id.
+    Starts exactly one workflow per conversation, keyed by session_id, then
+    asks the workflow for its (dynamically generated) greeting-and-name-ask
+    line — nothing about what the pirate says is hardcoded here.
     """
     client = await get_temporal_client()
     await client.start_workflow(
@@ -43,14 +45,18 @@ async def on_session_start(session_id: str) -> str:
         id=f"pirate-{session_id}",
         task_queue=TASK_QUEUE,
     )
-    return "Well, well. Another landlubber washes up on my shore."
+    handle = client.get_workflow_handle(f"pirate-{session_id}")
+    result = await handle.execute_update(PirateConversation.greet)
+    return result["line"]
 
 
 async def on_transcript(session_id: str, transcript: str) -> str:
     """
     Call this every time Speech Engine hands you a finished user
     transcript. Returns the exact text to hand to TTS — no LLM call, no
-    judgment call, just the workflow's next line.
+    judgment call, just the workflow's next line. The first call after
+    on_session_start is the child's reply to the name-ask; every call
+    after that is a guess attempt against the current clue budget.
     """
     client = await get_temporal_client()
     handle = client.get_workflow_handle(f"pirate-{session_id}")
@@ -64,9 +70,10 @@ async def on_transcript(session_id: str, transcript: str) -> str:
 async def _smoke_test():
     session_id = "test-session-1"
     print(await on_session_start(session_id))
-    for i in range(5):
+    print(await on_transcript(session_id, "my name is Billy"))
+    for i in range(4):
         line = await on_transcript(session_id, f"kid says something turn {i}")
-        print(f"turn {i+1}: {line}")
+        print(f"turn {i+2}: {line}")
 
 
 if __name__ == "__main__":

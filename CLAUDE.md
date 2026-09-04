@@ -16,6 +16,15 @@ password the kid brings to a treasure chest for candy.
 - The workflow decides WHAT may be said each turn (structured "clue
   budget": `vague_riddle` → `sea_theme` → `first_letter` → `word_count` →
   `reveal`). The Activity only wordsmiths that budget into one line.
+- The child's utterance is also checked each turn (`_guess_correct`,
+  whole-word match) against the password. A correct guess short-circuits
+  straight to a `correct_guess` reveal — the game doesn't force the
+  remaining clue turns just because the budget isn't exhausted yet.
+- The conversation opens with `greet()` (a separate update from
+  `submit_utterance`), a dynamically generated line that asks the child's
+  name. It isn't part of the clue-turn budget — the child's reply to it is
+  captured as their name (`_extract_name`, best-effort heuristic) and
+  becomes clue turn 1, not a wasted extra turn.
 - **Never trust LLM output**: after the Activity returns, the workflow
   leak-checks the line (`_password_leaked` in `temporal_workflows.py`:
   case-insensitive substring, reversed, spelled-out letter-by-letter). On
@@ -72,7 +81,10 @@ PIRATE_AWS_PROFILE=brianz-admin .venv/bin/python brain_server_sketch.py
 ## Gotchas learned the hard way
 
 - An update can be processed before `run()`'s first line — hence
-  `_ensure_password()` is called from both paths (idempotent).
+  `_ensure_password()` is called from every entry point (`run`, `greet`,
+  `submit_utterance`). It must assign to `self._password` itself, not just
+  return the value — callers besides `run()` discard the return value and
+  rely on the side effect.
 - Claude on Bedrock rejects `temperature` and `topP` together.
 - Signals are not ordered relative to updates; poll the `status` query if
   you need `set_child_name` to land before the next turn.

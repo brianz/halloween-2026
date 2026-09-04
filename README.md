@@ -1,10 +1,12 @@
 # Haunted Pirates — Captain Barnaby Bones
 
 A Halloween kiosk game. Kids walk up and talk to **Captain Barnaby
-Bones**, a friendly skeleton pirate. He plays a password guessing game
-with them — one clue per turn for up to 5 turns — then reveals a secret
-password. The kid brings the password to a nearby treasure chest to
-claim candy.
+Bones**, a friendly skeleton pirate. He greets them, asks their name, and
+plays a password guessing game — one progressively-easier clue per turn,
+up to 4 clues. If the kid guesses the password at any point, he reveals
+it immediately and celebrates; otherwise he reveals it after the 4th
+clue. The kid brings the password to a nearby treasure chest to claim
+candy.
 
 Why it's built this way: an earlier version used a hosted LLM voice
 agent and kept losing track of state mid-conversation. Now **ElevenLabs
@@ -43,8 +45,14 @@ kid hears ◀── ElevenLabs TTS ◀── brain server ◀──────�
   (case-insensitive substring, reversed, spelled-out letter-by-letter)
   before anyone hears it; any leak, timeout, or error falls back to a
   canned template. The kiosk never hangs or goes silent.
+- The child's utterance is checked every turn for a correct guess
+  (whole-word match against the password); the game reveals immediately
+  when that happens instead of forcing the remaining clue turns.
 - Conversation history and an optional kid's name live in workflow state
-  and are passed to each LLM call for continuity and personalization.
+  and are passed to each LLM call for continuity and personalization. The
+  name comes from the child's reply to the opening greeting's name-ask
+  (`greet()`), best-effort extracted — no name if they don't give a clean
+  one.
 
 ## Running locally
 
@@ -82,21 +90,27 @@ The worker hosts both the workflow and the LLM Activity.
 PIRATE_AWS_PROFILE=brianz-admin .venv/bin/python brain_server_sketch.py
 ```
 
-Simulates a full 5-turn conversation through the real stack (Temporal +
-Bedrock) and prints each pirate line. Example output:
+Simulates a full conversation through the real stack (Temporal + Bedrock)
+and prints the greeting plus each pirate line. Example output:
 
 ```
-Well, well. Another landlubber washes up on my shore.
-turn 1: [Chuckles] Ah, ye be startin' fresh, eh? …
-turn 2: [Enthusiastically] Arrr, good guessin'! Here be yer sea clue …
-turn 3: [Chuckles] Here's yer hint, matey—the answer starts with the letter 'S' …
-turn 4: [Enthusiastically] …the answer be THREE words long, savvy?
-turn 5: [Enthusiastically] Blimey, ye've done it! The password be Skull and Bones!
+[Cheerfully] Ahoy there, me young buccaneer! Welcome to me spooky ship — what be yer name, friend?
+Ahoy there, Billy! [Chuckles] What I be thinkin' of makes a pirate's heart go thump-thump — can ye guess?
+turn 2: Arrr, Billy, here be a hint: ye'd find it deep in the briny sea …
+turn 3: The word starts with the letter 'T', matey!
+turn 4: One more nudge... it be just one word long!
+turn 5: Arrr, Billy, ye've got it — the answer be Treasure! Ye be a true pirate now!
 ```
 
-Every turn should be freshly worded (LLM), escalate in specificity, and
-never contain the password before turn 5. If Bedrock is slow or down
-you'll see the static templates instead — the game still completes.
+Every clue turn should be freshly worded (LLM), escalate in specificity,
+use the captured name where it fits, and never contain the password
+before the reveal turn. If the child's simulated utterance ever contains
+the real password, the game ends immediately with a `correct_guess`
+celebration instead of running the remaining turns — the smoke test's
+generic filler utterances won't trigger this, but see
+`test_correct_guess_ends_game_early` in the test suite for a scripted
+example. If Bedrock is slow or down you'll see the static templates
+instead — the game still completes.
 
 ### 5. Unit tests — no AWS credentials needed
 

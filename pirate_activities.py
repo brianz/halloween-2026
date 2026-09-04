@@ -50,6 +50,24 @@ CLUE_LEVEL_INSTRUCTIONS = [
     ),
 ]
 
+# Not part of the turn-indexed clue progression above — used once each,
+# outside the normal clue budget.
+GREETING_INSTRUCTION = (
+    "greeting",
+    "This is the very first thing you say to a brand-new child who just "
+    "walked up. Greet them warmly in pirate style and ask their name. Do "
+    "not give any clue or mention the password game yet.",
+    [],
+)
+
+CORRECT_GUESS_INSTRUCTION = (
+    "correct_guess",
+    "The child just guessed the password correctly! Say the password "
+    "itself and celebrate enthusiastically — use their name if you know "
+    "it.",
+    [],
+)
+
 
 @dataclass
 class ClueRequest:
@@ -73,8 +91,8 @@ just said. Write ONE short, funny, pirate-themed line that fits that
 clue level.
 
 Rules:
-- Never say the password itself unless explicitly told this is the reveal
-  turn.
+- Never say the password itself unless the clue level for this turn is
+  "reveal" or "correct_guess".
 - Never use a sentence that makes the password obvious via a common
   phrase/idiom containing it (e.g. don't say "this treasure is what
   every pirate dreams of" if the password is "treasure").

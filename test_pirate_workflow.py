@@ -10,6 +10,11 @@ Covers the two mandated failure paths plus happy paths:
   few seconds, and the whole 5-turn game still finishes.
 - Normal LLM lines pass through unchanged.
 - Reveal turn: password allowed, appears in the line, game ends.
+- Correct-guess turn: game ends early (before the 5-turn budget) as soon
+  as the child's utterance contains the password, with its own
+  celebration wording (LLM-generated and static-fallback).
+- greet(): dynamic name-ask line, not part of the clue budget; the
+  child's reply is captured as the name and becomes clue turn 1.
 """
 
 import asyncio
@@ -73,7 +78,7 @@ async def test_happy_path_uses_llm_lines_and_never_leaks():
 
     utterances = [
         "hello captain",
-        "is it gold?",
+        "is it a bucket?",
         "does it start with K?",
         "give me a hint",
         "okay I give up",
@@ -265,6 +270,173 @@ async def test_history_and_child_name_reach_the_activity():
         assert "Maya" in r2["line"]
     finally:
         await env.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_correct_guess_ends_game_early():
+    """If the child's utterance contains the real password before the
+    5-turn budget is exhausted, the game reveals immediately via the
+    correct_guess clue level — it doesn't force the remaining clue turns."""
+
+    seen_requests: list[ClueRequest] = []
+
+    async def mock(req: ClueRequest) -> str:
+        seen_requests.append(req)
+        if req.clue_level == "correct_guess":
+            return f"Ye got it! 'Twas {req.password} all along!"
+        return f"[Chuckles] Clue for turn {req.turn} ({req.clue_level})."
+
+    env = await WorkflowEnvironment.start_time_skipping()
+    try:
+        client: Client = env.client
+        handle = await client.start_workflow(
+            PirateConversation.run,
+            id="test-pirate-correct-guess",
+            task_queue="test-queue",
+        )
+        async with Worker(
+            client,
+            task_queue="test-queue",
+            workflows=[PirateConversation],
+            activities=[_mock(mock)],
+        ):
+            # Turn 1: neutral guess, just to learn the real password from
+            # the request the mock activity received (status/queries never
+            # expose it — that's intentional).
+            r1 = await handle.execute_update(
+                PirateConversation.submit_utterance, "is it a bucket?"
+            )
+            assert r1["guessed"] is False
+            assert r1["done"] is False
+            password = seen_requests[0].password
+
+            # Turn 2: say the real password outright.
+            r2 = await handle.execute_update(
+                PirateConversation.submit_utterance, f"is it {password}?"
+            )
+        assert r2["guessed"] is True
+        assert r2["done"] is True
+        assert r2["turn"] == 2  # ended after 2 turns, not the full 5
+        assert seen_requests[1].clue_level == "correct_guess"
+        assert password.lower() in r2["line"].lower()
+    finally:
+        await env.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_correct_guess_fallback_wording_differs_from_timeout_reveal():
+    """When the Activity fails on the turn where the child just guessed
+    right, the fallback line still congratulates them — distinct from the
+    generic 'ye've earned it' wording used on a timeout-forced reveal."""
+
+    seen_requests: list[ClueRequest] = []
+
+    async def mock(req: ClueRequest) -> str:
+        seen_requests.append(req)
+        if req.clue_level == "correct_guess":
+            raise RuntimeError("bedrock exploded")
+        return "a normal clue line"
+
+    env = await WorkflowEnvironment.start_time_skipping()
+    try:
+        client: Client = env.client
+        handle = await client.start_workflow(
+            PirateConversation.run,
+            id="test-pirate-correct-guess-fallback",
+            task_queue="test-queue",
+        )
+        async with Worker(
+            client,
+            task_queue="test-queue",
+            workflows=[PirateConversation],
+            activities=[_mock(mock)],
+        ):
+            await handle.execute_update(PirateConversation.submit_utterance, "hi")
+            password = seen_requests[0].password
+            r2 = await handle.execute_update(
+                PirateConversation.submit_utterance, f"the password is {password}"
+            )
+        assert r2["guessed"] is True
+        assert r2["done"] is True
+        assert password.lower() in r2["line"].lower()
+        assert "clever buccaneer" in r2["line"]
+        assert "earned it" not in r2["line"]
+    finally:
+        await env.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_greet_asks_for_name_and_reply_becomes_first_clue_turn():
+    """greet() produces a dynamic line via the 'greeting' clue level and
+    isn't part of the clue budget; the child's next utterance is consumed
+    as a name-capture attempt and becomes clue turn 1 — not a separate,
+    wasted turn 0."""
+
+    seen_requests: list[ClueRequest] = []
+
+    async def mock(req: ClueRequest) -> str:
+        seen_requests.append(req)
+        if req.clue_level == "greeting":
+            return "Ahoy there, what be yer name?"
+        return f"[Chuckles] Clue turn {req.turn} for {req.child_name}."
+
+    env = await WorkflowEnvironment.start_time_skipping()
+    try:
+        client: Client = env.client
+        handle = await client.start_workflow(
+            PirateConversation.run,
+            id="test-pirate-greet",
+            task_queue="test-queue",
+        )
+        async with Worker(
+            client,
+            task_queue="test-queue",
+            workflows=[PirateConversation],
+            activities=[_mock(mock)],
+        ):
+            greeting = await handle.execute_update(PirateConversation.greet)
+            assert greeting["turn"] == 0
+            assert greeting["done"] is False
+            assert seen_requests[0].clue_level == "greeting"
+
+            r1 = await handle.execute_update(
+                PirateConversation.submit_utterance, "my name is Billy"
+            )
+            status = await handle.query(PirateConversation.status)
+
+        assert r1["turn"] == 1  # the name reply IS clue turn 1, not turn 0
+        assert seen_requests[1].clue_level == "vague_riddle"
+        assert seen_requests[1].child_name == "Billy"
+        assert "Billy" in r1["line"]
+        assert status["child_name"] == "Billy"
+    finally:
+        await env.shutdown()
+
+
+def test_guess_correct_word_boundaries():
+    """Direct unit tests of the guess checker: whole-word matches count,
+    a password as a prefix of a longer word does not."""
+    from temporal_workflows import _guess_correct
+
+    assert _guess_correct("is it treasure?", "Treasure")
+    assert _guess_correct("I think the answer is MAP", "map")
+    assert _guess_correct("Kraken's Kiss for sure", "Kraken's Kiss")
+    assert not _guess_correct("I mapped it out", "map")
+    assert not _guess_correct("no idea", "Treasure")
+
+
+def test_extract_name_variants():
+    """Direct unit tests of the name extractor: common lead-in phrases are
+    stripped, filler words are recognized as 'no name given'."""
+    from temporal_workflows import _extract_name
+
+    assert _extract_name("My name is Billy") == "Billy"
+    assert _extract_name("it's Sarah") == "Sarah"
+    assert _extract_name("Maya") == "Maya"
+    assert _extract_name("call me Max!") == "Max"
+    assert _extract_name("uh, I dunno") is None
+    assert _extract_name("no") is None
+    assert _extract_name("") is None
 
 
 def test_password_leak_detection_variants():
