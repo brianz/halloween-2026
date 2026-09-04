@@ -8,11 +8,49 @@ workflow — the LLM has zero say in turn counts, clue progression, or
 whether to reveal. It only wordsmiths.
 """
 
+import re
 from dataclasses import dataclass, field
 
 from temporalio import activity
 
 from llm_providers import get_provider
+
+# Only these ElevenLabs audio tags are whitelisted in SYSTEM_PROMPT. An
+# LLM-invented tag would be read aloud as words, so anything outside this
+# set is stripped from every line before it leaves the Activity.
+_AUDIO_TAG_RE = re.compile(r"\[([^\[\]]+)\]")
+
+
+def _sanitize_audio_tags(line: str) -> str:
+    """Normalize whitelisted ElevenLabs audio tags to their canonical
+    lowercase form (v3 expects e.g. [laughs], not [Laughs]) and drop any
+    other bracketed text — the LLM was told not to write any, but never
+    trust LLM output: an unknown tag would be spoken aloud as words."""
+
+    def _sub(m: re.Match) -> str:
+        inner = m.group(1).lower()
+        return f"[{inner}]" if inner in ALLOWED_AUDIO_TAGS else ""
+
+    # Unknown brackets removed outright (not spaced out) so one inserted
+    # mid-word can't split the password; whitespace collapse cleans the rest.
+    return " ".join(_AUDIO_TAG_RE.sub(_sub, line).split())
+
+
+ALLOWED_AUDIO_TAGS = frozenset(
+    {
+        "laughs",
+        "chuckles",
+        "whispers",
+        "sighs",
+        "excited",
+        "curious",
+        "mischievously",
+        "triumphantly",
+        "whistles",
+        "shouts",
+        "slow",
+    }
+)
 
 # Human-readable instructions for each clue level. The workflow picks the
 # index deterministically from the turn number; the LLM gets the *text*,
@@ -101,9 +139,12 @@ Rules:
   kids waiting.
 - You may briefly react to what the child said if it's charming or
   funny, then deliver the clue.
-- Do not use square brackets for anything except the specific ElevenLabs
-  audio tags already configured for this voice (e.g. [Chuckles],
-  [Enthusiastically]) — no stage directions in other brackets.
+- Audio tags: you may prefix or interleave ElevenLabs expressive audio tags
+  to color the delivery. Use ONLY these exact tags, spelled exactly:
+  [laughs] [chuckles] [whispers] [sighs] [excited] [curious] [mischievously]
+  [triumphantly] [whistles] [shouts] [slow]. Use at most one or two per
+  line — they color roughly the next 4-5 words. Never use any other
+  bracketed text: anything else in brackets will be read aloud.
 
 Respond with only the line itself — no quotes, no preamble."""
 
@@ -138,4 +179,4 @@ async def generate_pirate_line(req: ClueRequest) -> str:
     """
     provider = get_provider()
     line = provider.complete(SYSTEM_PROMPT, _build_user_prompt(req))
-    return line.strip()
+    return _sanitize_audio_tags(line)

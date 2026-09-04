@@ -34,7 +34,12 @@ from temporal_workflows import PirateConversation
 
 ELEVEN_KEY = os.environ["ELEVEN_LABS_API_KEY"]
 VOICE_ID = os.environ.get("PIRATE_VOICE_ID", "TG2O4Qh067u8gMkJrjhR")
-TTS_MODEL = os.environ.get("PIRATE_TTS_MODEL", "eleven_flash_v2_5")
+# eleven_v3 is required for audio tags ([laughs], [whispers], …) to be
+# *performed* instead of read aloud. Flash models ignore the tag support
+# and speak the bracket text literally. v3 doesn't take stability/
+# similarity_boost the way flash does, but it accepts and ignores them —
+# kept here so the request shape is model-agnostic.
+TTS_MODEL = os.environ.get("PIRATE_TTS_MODEL", "eleven_v3")
 ASR_MODEL = os.environ.get("PIRATE_ASR_MODEL", "scribe_v1")
 
 app = FastAPI(title="Pirate voice console")

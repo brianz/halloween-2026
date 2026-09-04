@@ -455,3 +455,44 @@ def test_password_leak_detection_variants():
     assert not _password_leaked("it starts with the letter K", pw)
     assert not _password_leaked("it's two words long", pw)
     assert not _password_leaked("think salty sea thoughts", pw)
+
+
+def test_sanitize_audio_tags():
+    """Whitelisted ElevenLabs audio tags survive (normalized to lowercase,
+    as eleven_v3 expects); invented tags and stage directions are stripped
+    before the line can reach TTS and be read aloud as words."""
+    from pirate_activities import _sanitize_audio_tags
+
+    # Whitelisted tags kept verbatim (already lowercase).
+    assert (
+        _sanitize_audio_tags("[laughs] Arrr matey [whispers] listen close")
+        == "[laughs] Arrr matey [whispers] listen close"
+    )
+    # Recognized but wrongly-cased tags normalize to lowercase.
+    assert _sanitize_audio_tags("[Chuckles] hello") == "[chuckles] hello"
+    assert _sanitize_audio_tags("[Excited] ahoy") == "[excited] ahoy"
+    # Unknown tags / stage directions are removed entirely.
+    assert _sanitize_audio_tags("yer [Enthusiastically] here") == "yer here"
+    assert _sanitize_audio_tags("ahoy [waves hook] matey") == "ahoy matey"
+    # A bracket injected mid-word can't split the password.
+    assert _sanitize_audio_tags("the password be Tre[x]asure") == "the password be Treasure"
+    # Whitespace collapses cleanly; empty input tolerated.
+    assert _sanitize_audio_tags("   ") == ""
+    assert _sanitize_audio_tags("no tags here") == "no tags here"
+
+
+def test_audio_tags_do_not_trip_leak_check():
+    """Lines with audio tags in them must not be mistaken for the
+    spelled-out-password leak pattern (the spelled-out check requires
+    letters separated by non-letters, and tag brackets alone aren't)."""
+    from temporal_workflows import _password_leaked
+
+    for pw in ["Treasure", "Parrot", "Ship", "Gold", "Anchor", "Map",
+               "Compass", "Island", "Hook", "Cannon"]:
+        assert not _password_leaked(
+            "[laughs] Arrr, still thinkin, eh? Here be another hint, matey!", pw
+        )
+        assert not _password_leaked(
+            "[curious] what be yer guess, little one? [chuckles]", pw
+        )
+

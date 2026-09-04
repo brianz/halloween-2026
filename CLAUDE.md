@@ -60,7 +60,7 @@ password the kid brings to a treasure chest for candy.
 | `PIRATE_BEDROCK_MODEL_ID` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Model override. Must be an inference-profile ID (`us.`-prefixed), not a raw foundation-model ID |
 | `PIRATE_BEDROCK_REGION` | `us-west-2` | Region override |
 | `PIRATE_VOICE_ID` | `TG2O4Qh067u8gMkJrjhR` (Barnaby custom voice) | Voice-test console TTS voice |
-| `PIRATE_TTS_MODEL` | `eleven_flash_v2_5` | Voice-test console TTS model (low latency) |
+| `PIRATE_TTS_MODEL` | `eleven_v3` | Voice-test console TTS model. `eleven_v3` is required for audio tags (`[laughs]`, `[whispers]`, …) to be *performed* — flash models read bracket text aloud |
 | `PIRATE_ASR_MODEL` | `scribe_v1` | Voice-test console ASR model |
 | `ELEVEN_LABS_API_KEY` | — | ElevenLabs ASR/TTS side (not needed for the Temporal/Bedrock smoke test) |
 | `ELEVEN_LABS_AGENT_KEY_ID` | — | Legacy `pirate-agent.py` only |
@@ -114,3 +114,9 @@ PIRATE_AWS_PROFILE=brianz-admin .venv/bin/python brain_server_sketch.py
   you need `set_child_name` to land before the next turn.
 - Signal name for tests: mock activities must be registered under the
   name `generate_pirate_line` via `activity.defn(name=...)`.
+- ElevenLabs audio tags (`[laughs]` etc.) only work with `eleven_v3`
+  TTS — flash models speak bracket text literally. The Activity whitelists
+  and normalizes tags (`_sanitize_audio_tags` in `pirate_activities.py`)
+  so LLM-invented tags are stripped before they can be read aloud. The
+  workflow's leak check is tag-safe (bracket text alone can't trip the
+  spelled-out check).
