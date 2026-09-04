@@ -74,8 +74,11 @@ Environment (e.g. via direnv in `.envrc`):
 
 ```bash
 export ELEVEN_LABS_API_KEY=...        # key with ElevenAgents read+write
-export ELEVEN_LABS_AGENT_KEY_ID=agent_5401m084pnhxf0z8bdyzj8depdes
 ```
+
+(The agent id is baked into `pirate_kiosk.py` as a default; set
+`PIRATE_AGENT_ID` to override it. Note `ELEVEN_LABS_AGENT_KEY_ID` in the
+old `.envrc` holds an API *key* id, not an agent id — it's unused now.)
 
 ### Per kid
 

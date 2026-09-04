@@ -32,8 +32,10 @@ password the kid brings to a treasure chest for candy.
 - **Audio tags** (`[laughs]`, `[triumphantly]`, …) are interpreted by
   ElevenLabs TTS itself — the prompt whitelists the exact tags and forbids
   any other bracketed text (anything else would be read aloud as words).
-- The agent id is in `ELEVEN_LABS_AGENT_KEY_ID` ("Ghost Pirate Captain",
-  `agent_5401m084pnhxf0z8bdyzj8depdes`).
+- The agent id is the default in `pirate_kiosk.py` ("Ghost Pirate Captain",
+  `agent_5401m084pnhxf0z8bdyzj8depdes`; `PIRATE_AGENT_ID` overrides). The
+  direnv var `ELEVEN_LABS_AGENT_KEY_ID` misleadingly holds an API *key* id —
+  it is unused by the kiosk.
 
 ## Files
 
@@ -47,7 +49,7 @@ password the kid brings to a treasure chest for candy.
 | Variable | Needed for |
 | --- | --- |
 | `ELEVEN_LABS_API_KEY` | Key with **ElevenAgents: Read + Write** permission |
-| `ELEVEN_LABS_AGENT_KEY_ID` | The agent id (`agent_5401m084pnhxf0z8bdyzj8depdes`) |
+| `PIRATE_AGENT_ID` | Optional agent-id override (default: the Ghost Pirate Captain id baked into `pirate_kiosk.py`) |
 
 ## Commands
 
