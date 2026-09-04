@@ -25,7 +25,6 @@ Stop: Ctrl-C ends the session (next kid = run it again).
 import os
 import random
 import re
-import signal
 import sys
 from pathlib import Path
 
@@ -36,17 +35,25 @@ from elevenlabs.conversational_ai.conversation import (
 )
 from elevenlabs.conversational_ai.default_audio_interface import DefaultAudioInterface
 
-AGENT_ID = os.environ.get("ELEVEN_LABS_AGENT_KEY_ID", "")
-if not AGENT_ID:
-    sys.exit("Set ELEVEN_LABS_AGENT_KEY_ID to the Ghost Pirate Captain agent id.")
+# The Ghost Pirate Captain agent. (Don't put this in ELEVEN_LABS_AGENT_KEY_ID —
+# that direnv var actually holds an API *key* id, not an agent id; it 404s.)
+AGENT_ID = os.environ.get("PIRATE_AGENT_ID", "agent_5401m084pnhxf0z8bdyzj8depdes")
 
 API_KEY = os.environ.get("ELEVEN_LABS_API_KEY", "")
 if not API_KEY:
     sys.exit("Set ELEVEN_LABS_API_KEY to a key with ElevenAgents read+write.")
 
 PASSWORD_POOL = [
-    "Treasure", "Parrot", "Ship", "Gold", "Anchor",
-    "Map", "Compass", "Island", "Hook", "Cannon",
+    "Treasure",
+    "Parrot",
+    "Ship",
+    "Gold",
+    "Anchor",
+    "Map",
+    "Compass",
+    "Island",
+    "Hook",
+    "Cannon",
 ]
 
 # The line the agent says before the child's first guess; kept here so the
@@ -82,12 +89,17 @@ def make_client_tools(password: str):
 
     tools = ClientTools()
 
-    def check_guess(parameters: dict) -> dict:
-        """Deterministic guess check — the agent calls this every turn."""
+    def check_guess(parameters: dict) -> str:
+        """Deterministic guess check — the agent calls this every turn.
+        MUST return a string: the orchestrator's websocket validator
+        rejects non-string client tool results with a 1008 policy
+        violation, which kills the whole session."""
         guess = parameters.get("guess", "")
         correct = _guess_correct(guess, password)
         print(f"  [check_guess] {guess!r} -> {'CORRECT' if correct else 'nope'}")
-        return {"correct": correct, "password": password if correct else None}
+        if correct:
+            return f"correct — the password is {password}. Reveal it now and celebrate!"
+        return "incorrect — keep playing, give the clue for this turn."
 
     tools.register("check_guess", check_guess)
     return tools
