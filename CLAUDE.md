@@ -72,7 +72,7 @@ Unit tests (`pytest`) mock the Activity and need **no AWS credentials**.
 A `justfile` wraps everything (requires `just`, `brew install just`):
 
 ```bash
-just deps       # install Python deps into .venv
+just deps       # uv sync — install Python deps into .venv from pyproject.toml
 just test       # unit tests (no AWS needed)
 just smoke      # text-only end-to-end vs real Bedrock (no ElevenLabs)
 just dev        # temporal dev server + worker + voice console, one command
@@ -85,8 +85,8 @@ just console    # just the voice console   (http://127.0.0.1:8123)
 Raw equivalents:
 
 ```bash
-# deps (project venv at .venv)
-uv pip install --python .venv/bin/python temporalio boto3 pytest pytest-asyncio fastapi "uvicorn[standard]" python-multipart httpx
+# deps (project venv at .venv, from pyproject.toml + uv.lock)
+uv sync
 
 # unit tests (no AWS needed)
 .venv/bin/python -m pytest test_pirate_workflow.py

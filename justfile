@@ -10,9 +10,9 @@ list:
 
 # ---- dependencies ----------------------------------------------------------
 
-# Install Python deps into the project venv
+# Sync Python deps from pyproject.toml into the project venv
 deps:
-    uv pip install --python .venv/bin/python temporalio boto3 pytest pytest-asyncio fastapi "uvicorn[standard]" python-multipart httpx
+    uv sync
 
 # ---- tests -----------------------------------------------------------------
 
