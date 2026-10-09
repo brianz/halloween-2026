@@ -5,6 +5,8 @@ description = "Captain Barnaby Bones voice password game — ElevenLabs hosted a
 requires-python = ">=3.12"
 dependencies = [
     "elevenlabs[pyaudio]>=2.66",
+    "esptool>=5.5.0",
+    "mpremote>=1.29.0",
 ]
 
 [tool.pytest.ini_options]
