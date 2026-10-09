@@ -16,15 +16,14 @@ from neopixel import NeoPixel
 # --- Wiring: change these to match your actual setup -----------------
 # "Positive"/"negative" from the breadboard are the strip's 5V/GND power
 # wires, not GPIO pins — they don't belong in code. Only the data line
-# (a GPIO) matters here. Update DATA_PIN to whatever GPIO your white/
-# data wire is actually on if it turns out not to be 15.
-DATA_PIN = 15
-NUM_LEDS = 30  # count the LEDs on your strip and set this exactly
+# (a GPIO) matters here.
+DATA_PIN = 5
+NUM_LEDS = 150  # count the LEDs on your strip and set this exactly
 
 # --- Look of the pulse -------------------------------------------------
-GOLD = (255, 180, 20)  # warm gold; use (255, 255, 0) for a punchier yellow
+GOLD = (255, 110, 0)  # amber-gold with a hint of red; less green/blue = less white
 MIN_BRIGHTNESS = 0.08  # never fully goes dark — keeps it feeling "alive"
-MAX_BRIGHTNESS = 1.0
+MAX_BRIGHTNESS = 0.9  # pulling back from 1.0 avoids a washed-out/white peak
 PULSE_PERIOD_S = 4.0  # seconds for one full dim->bright->dim breath
 STEPS_PER_PERIOD = 120  # higher = smoother, lower = less flicker-prone
 
