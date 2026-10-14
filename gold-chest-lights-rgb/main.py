@@ -36,7 +36,7 @@ MOSI_PIN = 23  # -> strip DI
 SCK_PIN = 18  # -> strip CI
 MISO_PIN = 19  # unused, but machine.SPI() requires a pin
 
-NUM_LEDS = 144  # one meter at 144 LED/m -- recount and change if you cut the strip
+NUM_LEDS = 288  # actual count on this strip -- recount and change if you cut it
 
 # --- Look of the pulse -------------------------------------------------
 GOLD = (255, 110, 0)  # amber-gold with a hint of red; less green/blue = less white

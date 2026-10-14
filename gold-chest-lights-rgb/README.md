@@ -2,9 +2,11 @@
 
 Same slow, warm amber-gold "breathing" pulse as `../gold-chest-lights`,
 but for a second treasure chest prop built with an [Adafruit DotStar
-(APA102) strip](https://www.adafruit.com/product/2239) — 144 LED/m, one
-meter, white PCB — instead of a WS2812B strip. Runs on its own separate
-ESP32-WROOM-32 board. MicroPython, no Arduino IDE, fully CLI-driven.
+(APA102) strip](https://www.adafruit.com/product/2239) — nominally
+144 LED/m, one meter, white PCB, but **288 LEDs actually wired and
+confirmed working** — instead of a WS2812B strip. Runs on its own
+separate ESP32-WROOM-32 board. MicroPython, no Arduino IDE, fully
+CLI-driven.
 
 If you retune the pulse's look (color, brightness range, speed), change
 it in both `main.py` here and `../gold-chest-lights/main.py` so the two
@@ -52,9 +54,9 @@ PCB itself: **5V, GND, DI (data in), CI (clock in)**.
   that's a classic symptom of a marginal logic-level signal — add a logic
   level shifter (e.g. 74AHCT125) on DI and CI before assuming a code bug.
 - Also set `NUM_LEDS` in `main.py` to the actual LED count on your strip
-  (currently **144**, the uncut one-meter length). The strip has cut
-  lines every LED if you need to shorten it — recount and update
-  `NUM_LEDS` if you do.
+  (currently **288** — confirmed by testing, not just the 144 LED/m
+  figure on the product listing). The strip has cut lines every LED if
+  you need to shorten it — recount and update `NUM_LEDS` if you do.
 
 ## One-time setup
 

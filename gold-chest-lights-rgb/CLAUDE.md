@@ -70,3 +70,10 @@ ls /dev/cu.*                               # both boards' serial ports, only
   mode (dead driver chips that block everything downstream, looking
   identical to zero wiring) is the same risk, just at a lower voltage
   threshold.
+- The product listing's "144 LED/m" figure wasn't the real count: this
+  strip actually has **288 LEDs**. With `NUM_LEDS` set too low, only the
+  first half of the strip lit — a wrong-but-plausible-looking result
+  (not a dead strip, not a wiring fault), because the end frame still
+  clocks out *something*, just not enough to latch every pixel. Don't
+  trust a datasheet/listing LED count — verify by watching the physical
+  strip when `NUM_LEDS` is suspect.

@@ -26,7 +26,7 @@ from machine import SPI, Pin
 MOSI_PIN = 23  # -> strip DI
 SCK_PIN = 18  # -> strip CI
 MISO_PIN = 19  # unused, but machine.SPI() requires a pin
-NUM_LEDS = 144
+NUM_LEDS = 288
 
 spi = SPI(
     2,
