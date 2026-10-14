@@ -1,19 +1,19 @@
-# Gold Chest Lights — RGB (4-wire) variant
+# Gold Chest Lights — DotStar variant
 
-ESP32-WROOM-32 + 5V analog RGB strip (4 wires: +5V, R, G, B — PWM-dimmed
-through MOSFETs, no onboard pixel chip), MicroPython, same slow warm-gold
-breathing pulse as `../gold-chest-lights` but for a second treasure chest
-prop on a separate ESP32 board. See `README.md` in this directory for
-wiring and full setup/upload steps. This file is about the dev
-environment only.
+ESP32-WROOM-32 + Adafruit DotStar (APA102) strip (144 LED/m, 4 wires: 5V,
+GND, DI, CI — addressable, data+clock over SPI, no onboard analog PWM
+channels), MicroPython, same slow warm-gold breathing pulse as
+`../gold-chest-lights` but for a second treasure chest prop on a separate
+ESP32 board. See `README.md` in this directory for wiring and full
+setup/upload steps. This file is about the dev environment only.
 
 ## Keep this in sync with ../gold-chest-lights
 
-Same visual effect, different strip hardware and GPIO role (PWM duty
-cycle on 3 channels here vs. NeoPixel data-out there). If you retune
-`GOLD` / `MIN_BRIGHTNESS` / `MAX_BRIGHTNESS` / `PULSE_PERIOD_S` /
-`STEPS_PER_PERIOD` in one `main.py`, mirror the same values in the other
-so the two chests breathe identically.
+Same visual effect, different strip hardware and GPIO role (hand-rolled
+APA102 frames over `machine.SPI` here vs. the built-in `neopixel` module
+there). If you retune `GOLD` / `MIN_BRIGHTNESS` / `MAX_BRIGHTNESS` /
+`PULSE_PERIOD_S` / `STEPS_PER_PERIOD` in one `main.py`, mirror the same
+values in the other so the two chests breathe identically.
 
 ## Environment — shared root venv, not a venv in this directory
 
@@ -48,18 +48,25 @@ ls /dev/cu.*                               # both boards' serial ports, only
   delay.
 - The MicroPython firmware `.bin` is a downloaded artifact — don't commit
   it, re-fetch from https://micropython.org/download/ESP32_GENERIC/.
-- Don't trust a visual pin ID for wiring you haven't verified in code —
-  `pin_sweep.py` exists because of exactly that mistake on the other
-  chest.
 - Two ESP32 boards plugged in at once means two `/dev/cu.*` entries —
   double-check which port you're targeting before flashing/uploading so
   you don't overwrite the wrong board's `main.py`.
 
-## New gotcha specific to this (PWM/MOSFET) variant
+## New gotchas specific to this (DotStar/APA102) variant
 
-- A 4-wire strip has **no data protocol** — unlike the WS2812B strip's
-  single GPIO driving hundreds of addressable pixels over one data line,
-  each color channel here is a plain PWM-dimmed power line and needs its
-  own GPIO *and* its own MOSFET to handle the current. Confirm MOSFET
-  gate wiring (gate → GPIO, source → GND, drain → strip channel) before
-  assuming a code or pin problem.
+- Don't assume this is "the same as the RGB strip wiring" or "the same
+  as the WS2812B strip wiring" — it's neither. There's no MOSFET/PWM
+  layer (this is a direct digital logic signal like WS2812B) but it's
+  two wires, not one (data + clock, more like SPI), and MicroPython has
+  no built-in driver for it the way it does for WS2812B's `neopixel`
+  module — `main.py` builds APA102's start-frame/pixel-frame/end-frame
+  byte layout by hand over `machine.SPI`.
+- `machine.SPI()` on ESP32 requires a `miso` pin argument to construct
+  the bus even though this one-directional link never reads anything —
+  `MISO_PIN` in `main.py` is a throwaway GPIO, not a real wire.
+- Never exceed 6V on this strip (Adafruit's own spec) — don't assume the
+  12V-strip overvoltage gotcha from `../gold-chest-lights/CLAUDE.md`
+  doesn't apply just because this is "a different strip"; the failure
+  mode (dead driver chips that block everything downstream, looking
+  identical to zero wiring) is the same risk, just at a lower voltage
+  threshold.

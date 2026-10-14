@@ -1,42 +1,60 @@
-# Gold Chest Lights — RGB (4-wire) variant
+# Gold Chest Lights — DotStar variant
 
-Same slow, warm amber-gold "breathing" pulse as `../gold-chest-lights`, but
-for a second treasure chest prop built with a 5V analog RGB strip (4 wires:
-+5V, R, G, B — no onboard pixel chip) instead of a WS2812B strip. Runs on
-its own separate ESP32-WROOM-32 board. MicroPython, no Arduino IDE, fully
-CLI-driven.
+Same slow, warm amber-gold "breathing" pulse as `../gold-chest-lights`,
+but for a second treasure chest prop built with an [Adafruit DotStar
+(APA102) strip](https://www.adafruit.com/product/2239) — 144 LED/m, one
+meter, white PCB — instead of a WS2812B strip. Runs on its own separate
+ESP32-WROOM-32 board. MicroPython, no Arduino IDE, fully CLI-driven.
 
-If you retune the pulse's look (color, brightness range, speed), change it
-in both `main.py` here and `../gold-chest-lights/main.py` so the two chests
-stay in sync.
+If you retune the pulse's look (color, brightness range, speed), change
+it in both `main.py` here and `../gold-chest-lights/main.py` so the two
+chests stay in sync.
+
+## Why this isn't the same code as ../gold-chest-lights or a PWM/RGB strip
+
+DotStar is addressable, like WS2812B — one GPIO can drive hundreds of
+individually-settable pixels — but instead of WS2812B's single
+self-clocked data line, APA102 (the chip DotStar is built on) uses two
+wires: a data line and a separate clock line, much like SPI. That means:
+
+- No MOSFETs or per-channel GPIOs needed (unlike a plain analog 4-wire
+  RGB strip) — this is a direct logic-level digital connection, same
+  category as the WS2812B strip, just two wires instead of one.
+- MicroPython's built-in `neopixel` module doesn't speak this protocol,
+  so `main.py` talks to the strip directly over `machine.SPI`, building
+  the APA102 frame format (start frame, one 4-byte frame per LED, end
+  frame) by hand.
 
 ## Wiring
 
-A 4-wire RGB strip has no data protocol — each color channel is just a
-PWM-dimmable power line. The ESP32 GPIOs can't sink that current directly,
-so each channel goes through its own N-channel MOSFET (e.g. AO3400,
-2N7000, or a 3-channel MOSFET driver breakout):
+The strip has a 4-pin JST SM connector on each end, labeled on the flex
+PCB itself: **5V, GND, DI (data in), CI (clock in)**.
 
-- Strip **+5V** → a 5V supply. For a short strip this can be the ESP32's
-  own 5V pin; for anything longer, use a separate 5V PSU sized for the
-  strip's total draw — **don't try to power the strip through the ESP32's
-  5V pin for anything but a quick bench test.**
-- Strip **GND**, PSU GND (if separate), and ESP32 GND all tied together —
-  a MOSFET low-side switch only works with a shared ground.
-- Strip **R** → MOSFET #1 drain; MOSFET #1 source → GND; MOSFET #1 gate →
-  **GPIO 25**.
-- Strip **G** → MOSFET #2 drain; MOSFET #2 source → GND; MOSFET #2 gate →
-  **GPIO 26**.
-- Strip **B** → MOSFET #3 drain; MOSFET #3 source → GND; MOSFET #3 gate →
-  **GPIO 27**.
-- These are constants (`RED_PIN` / `GREEN_PIN` / `BLUE_PIN` at the top of
-  `main.py`) — change and re-upload if the wiring ever differs. Don't
-  trust a schematic read alone; if a channel doesn't light, use
-  `pin_sweep.py` (below) to find the real pin.
-- The strip is 5V — **never power it from anything higher.** (A 12V
-  supply killed a WS2812B strip on the other chest: see
-  `../gold-chest-lights/README.md`'s wiring notes. Same risk applies
-  here.)
+- Strip **5V** → a 5V supply, and strip **GND** → that supply's GND, tied
+  together with the ESP32's GND. **Never exceed 6V** — Adafruit's own
+  spec for this strip says a higher voltage can destroy the whole run of
+  LED driver chips, not just the first one.
+  - For a single meter, Adafruit's 5V/4A adapter (wired in via a 2.1mm DC
+    jack) is their suggested supply; don't try to run a full meter off
+    the ESP32's own 5V pin.
+- Strip **DI** → ESP32 **GPIO 23** (`MOSI_PIN` in `main.py`).
+- Strip **CI** → ESP32 **GPIO 18** (`SCK_PIN` in `main.py`).
+- GPIO 23/18 are the ESP32's default hardware VSPI pins, chosen so
+  `main.py` can use `machine.SPI` (hardware-accelerated) instead of a
+  slower bit-banged software SPI.
+- `machine.SPI` also wants a MISO pin to construct the bus (`MISO_PIN` =
+  **GPIO 19**) even though this strip has no data-out wire to send
+  anything back on — leave it unconnected, it's only there to satisfy the
+  constructor.
+- For a short run (around a meter, like this one) at 3.3V logic level
+  into a 5V strip, direct GPIO connection is normally reliable. If pixels
+  flicker, show wrong colors, or only the first few respond correctly,
+  that's a classic symptom of a marginal logic-level signal — add a logic
+  level shifter (e.g. 74AHCT125) on DI and CI before assuming a code bug.
+- Also set `NUM_LEDS` in `main.py` to the actual LED count on your strip
+  (currently **144**, the uncut one-meter length). The strip has cut
+  lines every LED if you need to shorten it — recount and update
+  `NUM_LEDS` if you do.
 
 ## One-time setup
 
@@ -85,22 +103,18 @@ mpremote connect /dev/cu.usbserial-XXXX sleep 3 run main.py
 ```
 (Ctrl-C stops the pulse and turns the strip off.)
 
-## If a channel doesn't light (or lights the wrong color)
+## If the strip doesn't light (or looks wrong)
 
-`pin_sweep.py` drives every plausible GPIO high/low in turn, printing
-each one, so you can watch the strip and find which pin actually drives
-which MOSFET gate:
+`spi_check.py` cycles the whole strip through red/green/blue/white/off so
+you can confirm the SPI link and strip work independent of the breathing
+logic:
 
 ```bash
-mpremote connect /dev/cu.usbserial-XXXX sleep 3 run pin_sweep.py
+mpremote connect /dev/cu.usbserial-XXXX sleep 3 run spi_check.py
 ```
 
-Watch *which color* lights up at each printed pin, not just whether
-something lights up — a mismatched RED_PIN/GREEN_PIN/BLUE_PIN assignment
-looks fine electrically but produces the wrong hues once `main.py` runs.
-
-If **no** pin does anything — even with a MOSFET gate wire physically
-unplugged giving the identical result — the problem isn't the pin or the
-code, it's the strip, its power, or the MOSFET wiring. Check the shared
-ground first (see Wiring above); a floating ground between the ESP32 and
-the strip's power supply looks identical to "nothing is connected."
+If **no** color does anything, this is a two-wire digital protocol with
+both wires already labeled on the strip's PCB — there's no GPIO to sweep
+the way `pin_sweep.py` does for the other two chests. Check, in order:
+shared ground between the ESP32 and the strip's power supply, DI → GPIO
+23, CI → GPIO 18, and that the strip hasn't seen more than 6V.
