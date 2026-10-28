@@ -20,3 +20,7 @@ deps:
 # Ctrl-C when the kid walks off. Run again for the next kid.
 kiosk:
     .venv/bin/python pirate_kiosk.py
+
+# One kid's session, riddle mode: picks a riddle instead of a bare password.
+riddle-kiosk:
+    .venv/bin/python pirate_riddle_kiosk.py
