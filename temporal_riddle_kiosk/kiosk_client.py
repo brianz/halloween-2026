@@ -18,6 +18,10 @@ One run of this script = one kid's conversation = one workflow execution:
      result back to the agent.
   4. On Ctrl-C (or the agent revealing the answer), signal end_session so
      the workflow finishes promptly instead of idling out its timeout.
+  5. A background watcher (watch_for_termination) also runs the other way:
+     if the workflow ends abnormally — most notably `just kill` terminating
+     it from another terminal — it ends the ElevenLabs session right away,
+     so this process doesn't sit there with no game left behind it.
 
 Prerequisites (see README.md):
   - `temporal server start-dev` running
@@ -34,6 +38,7 @@ Off by default. See RecordingAudioInterface below.
 
 import argparse
 import asyncio
+import concurrent.futures
 import os
 import sys
 import threading
@@ -133,9 +138,32 @@ class TemporalBridge:
     def run(self, coro, timeout: float = 10.0):
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
 
+    def run_background(self, coro) -> concurrent.futures.Future:
+        """Schedule a coroutine without waiting for it. The returned future
+        can be cancelled from any thread (see watch_for_termination)."""
+        return asyncio.run_coroutine_threadsafe(coro, self._loop)
+
     def stop(self) -> None:
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join(timeout=5)
+
+
+async def watch_for_termination(handle: WorkflowHandle, conversation: Conversation) -> None:
+    """`just kill` (or anything else that ends the workflow abnormally —
+    terminate, cancel, a genuine failure) leaves the kiosk process sitting
+    there with no game left to drive it, since nothing else tells the
+    ElevenLabs session to hang up. A clean finish (correct guess,
+    out_of_guesses, abandoned, timed_out) resolves handle.result() normally,
+    with no exception — only an abnormal end should cut the session short.
+    """
+    try:
+        await handle.result()
+    except Exception as e:
+        print(f"  [temporal] workflow ended abnormally ({e!r}) — ending ElevenLabs session")
+        try:
+            conversation.end_session()
+        except Exception:
+            pass
 
 
 def start_game(bridge: TemporalBridge) -> tuple[WorkflowHandle, RiddleDef]:
@@ -250,11 +278,13 @@ def run_kid_session(
         callback_user_transcript=lambda text: print(f"🧒 Kid: {text}"),
     )
     conversation.start_session()
+    watcher = bridge.run_background(watch_for_termination(handle, conversation))
     try:
         conversation.wait_for_session_end()
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
+        watcher.cancel()  # workflow is still ours to finish normally from here on
         conversation.end_session()  # blocks until audio_interface.stop() finishes (closes WAV files if recording)
         if record:
             print(f"  [recording] mic:   {mic_path}")
