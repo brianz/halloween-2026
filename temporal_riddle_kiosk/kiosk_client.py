@@ -16,12 +16,17 @@ One run of this script = one kid's conversation = one workflow execution:
   3. Start the ElevenLabs Conversation. Its check_guess client tool sends
      each guess to the workflow as an Update and relays the (synchronous)
      result back to the agent.
-  4. On Ctrl-C (or the agent revealing the answer), signal end_session so
-     the workflow finishes promptly instead of idling out its timeout.
-  5. A background watcher (watch_for_termination) also runs the other way:
-     if the workflow ends abnormally — most notably `just kill` terminating
-     it from another terminal — it ends the ElevenLabs session right away,
-     so this process doesn't sit there with no game left behind it.
+  4. On Ctrl-C, signal end_session so the workflow finishes promptly
+     instead of idling out its timeout.
+  5. A background watcher (watch_for_workflow_end) also runs the other way:
+     once the workflow ends — for ANY reason, not just an operator's
+     Ctrl-C — it ends the ElevenLabs session so this process exits on its
+     own instead of sitting there with no game left behind it. `just kill`
+     (or any other abnormal end) hangs up immediately; a clean finish
+     (correct guess, out_of_guesses, timed_out) gets a short grace period
+     first so the agent can finish speaking the reveal — workflow
+     completion and the deciding guess land in the very same instant, well
+     before the agent has said anything about it.
 
 Prerequisites (see README.md):
   - `temporal server start-dev` running
@@ -71,6 +76,14 @@ TASK_QUEUE = "pirate-riddle-task-queue"
 CURRENT_WORKFLOW_FILE = Path(__file__).with_name("current_workflow.txt")
 
 RECORDINGS_DIR = Path(__file__).with_name("recordings")
+
+# How long to let the agent keep talking after a CLEAN workflow finish
+# (correct guess, out_of_guesses, timed_out) before this process hangs up
+# and exits. Confirmed against real workflow history: WorkflowExecutionCompleted
+# lands in the same instant as the deciding guess's Update, before the agent
+# has necessarily said a word about it. Not used for an abnormal end (`just
+# kill`, cancel, a real failure) — that's meant to be immediate.
+WORKFLOW_END_GRACE_SECONDS = 8.0
 
 FIRST_MESSAGE = (
     "[chuckles] Well, well... another landlubber washes up on me shore. "
@@ -140,7 +153,7 @@ class TemporalBridge:
 
     def run_background(self, coro) -> concurrent.futures.Future:
         """Schedule a coroutine without waiting for it. The returned future
-        can be cancelled from any thread (see watch_for_termination)."""
+        can be cancelled from any thread (see watch_for_workflow_end)."""
         return asyncio.run_coroutine_threadsafe(coro, self._loop)
 
     def stop(self) -> None:
@@ -148,22 +161,33 @@ class TemporalBridge:
         self._thread.join(timeout=5)
 
 
-async def watch_for_termination(handle: WorkflowHandle, conversation: Conversation) -> None:
-    """`just kill` (or anything else that ends the workflow abnormally —
-    terminate, cancel, a genuine failure) leaves the kiosk process sitting
-    there with no game left to drive it, since nothing else tells the
-    ElevenLabs session to hang up. A clean finish (correct guess,
-    out_of_guesses, abandoned, timed_out) resolves handle.result() normally,
-    with no exception — only an abnormal end should cut the session short.
+async def watch_for_workflow_end(handle: WorkflowHandle, conversation: Conversation) -> None:
+    """Ends the ElevenLabs session once the workflow is done, so this
+    process exits on its own instead of sitting there waiting for a Ctrl-C
+    the operator has no more reason to give.
+
+    `just kill` (or anything else that ends the workflow abnormally —
+    terminate, cancel, a genuine failure) hangs up right away. A clean
+    finish (correct guess, out_of_guesses, abandoned, timed_out) resolves
+    handle.result() normally with no exception — those get a grace period
+    first (WORKFLOW_END_GRACE_SECONDS) so the agent can finish speaking,
+    since the workflow completes the instant the deciding guess lands, not
+    after the agent has said anything about it.
     """
     try:
         await handle.result()
     except Exception as e:
         print(f"  [temporal] workflow ended abnormally ({e!r}) — ending ElevenLabs session")
-        try:
-            conversation.end_session()
-        except Exception:
-            pass
+    else:
+        print(
+            f"  [temporal] workflow finished — ending ElevenLabs session in "
+            f"{WORKFLOW_END_GRACE_SECONDS:.0f}s"
+        )
+        await asyncio.sleep(WORKFLOW_END_GRACE_SECONDS)
+    try:
+        conversation.end_session()
+    except Exception:
+        pass
 
 
 def start_game(bridge: TemporalBridge) -> tuple[WorkflowHandle, RiddleDef]:
@@ -278,7 +302,7 @@ def run_kid_session(
         callback_user_transcript=lambda text: print(f"🧒 Kid: {text}"),
     )
     conversation.start_session()
-    watcher = bridge.run_background(watch_for_termination(handle, conversation))
+    watcher = bridge.run_background(watch_for_workflow_end(handle, conversation))
     try:
         conversation.wait_for_session_end()
     except (KeyboardInterrupt, SystemExit):

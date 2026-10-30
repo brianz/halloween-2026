@@ -116,21 +116,33 @@ settings — `DefaultAudioInterface` just opens whatever the OS's default
 input device is, there's nothing kiosk-specific to toggle.
 
 **Ending a kid's game and resetting for the next one:**
-- Normal case (kid finishes, or walks away): Ctrl-C in the kiosk terminal.
-  This ends the ElevenLabs session and signals `end_session` to the
-  workflow, which finishes it immediately (`outcome="abandoned"` if it
-  wasn't already won) instead of idling out the 10-minute timeout.
-- Then just rerun `just kiosk` — it starts a brand-new
-  `riddle-game-<uuid>` workflow with fresh state, same "one process per
-  kid" guarantee as the plain kiosk.
+- Usually you don't have to do anything — `kiosk_client.py` exits on its
+  own once the workflow is done, via a background watcher
+  (`watch_for_workflow_end`) that waits on the same `handle.result()`
+  the workflow's own completion resolves. A clean finish (correct guess,
+  out_of_guesses, timed_out) gets a `WORKFLOW_END_GRACE_SECONDS` (8s)
+  grace period first, so the agent has time to actually speak the reveal —
+  workflow completion lands in the same instant as the deciding guess,
+  well before the agent has said anything about it.
+- Kid walks away mid-game: Ctrl-C in the kiosk terminal. This ends the
+  ElevenLabs session and signals `end_session` to the workflow, which
+  finishes it immediately (`outcome="abandoned"`) instead of idling out
+  the 10-minute timeout. No grace period on this path — it's already an
+  explicit "end it now."
+- Either way, just rerun `just kiosk` for the next kid — it starts a
+  brand-new `riddle-game-<uuid>` workflow with fresh state, same "one
+  process per kid" guarantee as the plain kiosk.
 - If the kiosk process itself is wedged and Ctrl-C in its terminal won't
   land, force-terminate the in-progress game from a second terminal:
   ```bash
   just kill
   ```
   (reads the workflow id `kiosk_client.py` wrote to `current_workflow.txt`
-  at session start, same uuid it printed to stdout). Then kill/restart the
-  stuck kiosk process and rerun `just kiosk`.
+  at session start, same uuid it printed to stdout). The same watcher
+  notices the workflow ended abnormally and hangs up immediately (no
+  grace period for this path either) — but if the kiosk process is
+  genuinely wedged rather than just mid-game, kill/restart it and rerun
+  `just kiosk`.
 
 Watch a game live while it's running:
 

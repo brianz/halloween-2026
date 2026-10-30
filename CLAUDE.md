@@ -75,6 +75,16 @@ lives*, not how you run or control a session:
   terminal; the Temporal kiosk drops its workflow id in
   `temporal_riddle_kiosk/current_workflow.txt` so `just kill` (run from
   that directory) can terminate the workflow directly.
+- **Known divergence:** `temporal_riddle_kiosk/kiosk_client.py` exits on
+  its own once the workflow ends, for any reason — a background watcher
+  (`watch_for_workflow_end`) waits on `handle.result()` and ends the
+  ElevenLabs session when it resolves: immediately on an abnormal end
+  (`just kill`), after a short grace period (`WORKFLOW_END_GRACE_SECONDS`)
+  on a clean finish (correct guess, out_of_guesses, timed_out) so the agent
+  gets to actually say the reveal line — workflow completion lands in the
+  same instant as the deciding guess, before the agent has said anything
+  about it. `pirate_riddle_kiosk.py` has no separate orchestration layer to
+  watch this way, so it still always needs an explicit Ctrl-C per session.
 
 ## Files
 
