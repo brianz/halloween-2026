@@ -101,7 +101,8 @@ just deps              # uv sync — installs temporalio + elevenlabs here
 
 just server            # terminal 1: temporal server start-dev
 just worker            # terminal 2: the worker process
-ELEVEN_LABS_API_KEY=... just kiosk   # terminal 3: one kid's session
+ELEVEN_LABS_API_KEY=... just kiosk            # terminal 3: one kid's session
+ELEVEN_LABS_API_KEY=... just kiosk --record   # same, but also record this session (see "Recordings" below)
 ```
 
 All on one laptop: `temporal server start-dev` and `worker.py` are started
@@ -140,3 +141,37 @@ temporal workflow show --workflow-id riddle-game-<uuid-from-kiosk-output>
 
 Every accepted guess also appends a line to `guess_log.jsonl` in this
 directory (written by the `record_guess` activity).
+
+## Recordings
+
+Off by default. Pass `--record` (`just kiosk --record`) to have that session
+write two local WAV files, named by that kid's workflow id, to
+`recordings/` in this directory:
+
+```
+recordings/riddle-game-<uuid>_mic.wav     # the kid's side
+recordings/riddle-game-<uuid>_agent.wav   # Captain Barnaby's side
+```
+
+`RecordingAudioInterface` in `kiosk_client.py` is a thin subclass of the
+SDK's `DefaultAudioInterface` that tees each raw PCM chunk (16-bit mono,
+16kHz — the same format the SDK already uses, so no re-encoding) to a WAV
+file before handing it on as normal. It's local-only and has no dependency
+on ElevenLabs' own conversation-history/audio retention settings — the file
+exists the moment the kiosk process writes it, regardless of what's
+configured on the agent.
+
+Two mono files rather than one stereo mix, because mic input and agent
+output arrive on independent threads with no shared clock to line them up
+against. To review one kid's full back-and-forth as a single file:
+
+```bash
+ffmpeg -i recordings/riddle-game-<uuid>_mic.wav \
+       -i recordings/riddle-game-<uuid>_agent.wav \
+       -filter_complex amix=inputs=2:duration=longest \
+       recordings/riddle-game-<uuid>_mixed.wav
+```
+
+Both files are written as soon as `conversation.end_session()` returns
+(Ctrl-C or `just kill` both trigger it), so they're ready to play back
+immediately — no waiting on anything server-side.

@@ -2,3 +2,5 @@ __pycache__
 .envrc
 gold-chest-lights/.fw/
 gold-chest-lights-rgb/.fw/
+recordings/
+current_riddle_kiosk.pid

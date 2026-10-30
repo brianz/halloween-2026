@@ -18,9 +18,10 @@ server:
 worker:
     .venv/bin/python worker.py
 
-# One kid's session: mic + speakers, Ctrl-C to end, rerun for next kid
-kiosk:
-    .venv/bin/python kiosk_client.py
+# One kid's session: mic + speakers, Ctrl-C to end, rerun for next kid.
+# Pass --record to also save mic + agent audio to recordings/ (off by default).
+kiosk *args:
+    .venv/bin/python kiosk_client.py {{args}}
 
 # Force-terminate the in-progress game from a second terminal — for when the
 # kiosk process itself is wedged and Ctrl-C in terminal 3 won't land. Normal

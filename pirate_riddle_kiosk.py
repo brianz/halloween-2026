@@ -21,14 +21,24 @@ pirate_kiosk.py):
   - Tools tab: add a CLIENT tool named check_guess with one required
     string parameter "guess".
 
-Run:  .venv/bin/python pirate_riddle_kiosk.py
-Stop: Ctrl-C ends the session (next kid = run it again).
+Run:  .venv/bin/python pirate_riddle_kiosk.py [--record]
+Stop: Ctrl-C ends the session (next kid = run it again). If the process is
+      wedged and Ctrl-C in its own terminal won't land, `just kill-riddle-kiosk`
+      from a second terminal sends it the same SIGINT from the process id
+      this script drops in current_riddle_kiosk.pid at startup.
+
+Pass --record to write two local WAV files to recordings/ for the session —
+the kid's mic input and the Captain's TTS output, named by that session's
+id. Off by default. See RecordingAudioInterface below.
 """
 
+import argparse
 import os
 import random
 import re
 import sys
+import uuid
+import wave
 from pathlib import Path
 
 from elevenlabs.client import ElevenLabs
@@ -45,6 +55,13 @@ AGENT_ID = os.environ.get("PIRATE_AGENT_ID", "agent_5401m084pnhxf0z8bdyzj8depdes
 API_KEY = os.environ.get("ELEVEN_LABS_API_KEY", "")
 if not API_KEY:
     sys.exit("Set ELEVEN_LABS_API_KEY to a key with ElevenAgents read+write.")
+
+# Overwritten with this process's pid at startup, so `just kill-riddle-kiosk`
+# can force-quit a wedged session from a second terminal (plain SIGINT — the
+# same signal Ctrl-C sends) without hunting for the pid by hand.
+CURRENT_SESSION_FILE = Path(__file__).with_name("current_riddle_kiosk.pid")
+
+RECORDINGS_DIR = Path(__file__).with_name("recordings")
 
 RIDDLE_POOL = [
     {
@@ -157,13 +174,75 @@ def _guess_correct(guess: str, answer: str) -> bool:
     return any(g_words[i : i + n] == a_words for i in range(len(g_words) - n + 1))
 
 
-def run_kid_session(riddle: dict) -> None:
+# --- Recording mic input + agent output to local WAV files -----------------
+#
+# DefaultAudioInterface already receives every raw PCM chunk going in each
+# direction (16-bit mono, 16kHz — see its INPUT/OUTPUT constants); this just
+# tees each chunk to a WAV file before handing it on, so no extra network
+# calls or re-encoding. Two mono files rather than one stereo mix, since mic
+# and agent audio arrive on independent threads with no shared clock to
+# interleave them against — ffmpeg can merge them afterward if a single file
+# is wanted.
+
+
+class RecordingAudioInterface(DefaultAudioInterface):
+    SAMPLE_RATE = 16000
+
+    def __init__(self, mic_path: Path, agent_path: Path) -> None:
+        super().__init__()
+        self._mic_wav = self._open_wav(mic_path)
+        self._agent_wav = self._open_wav(agent_path)
+
+    def _open_wav(self, path: Path) -> wave.Wave_write:
+        w = wave.open(str(path), "wb")
+        w.setnchannels(1)
+        w.setsampwidth(2)  # paInt16
+        w.setframerate(self.SAMPLE_RATE)
+        return w
+
+    def _in_callback(self, in_data, frame_count, time_info, status):
+        self._mic_wav.writeframes(in_data)
+        return super()._in_callback(in_data, frame_count, time_info, status)
+
+    def output(self, audio: bytes) -> None:
+        self._agent_wav.writeframes(audio)
+        super().output(audio)
+
+    def stop(self) -> None:
+        super().stop()
+        self._mic_wav.close()
+        self._agent_wav.close()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--record",
+        action="store_true",
+        help="Record this session's mic input and agent output to recordings/ (off by default)",
+    )
+    return parser.parse_args()
+
+
+def run_kid_session(riddle: dict, record: bool = False) -> None:
+    session_id = f"riddle-session-{uuid.uuid4()}"
+    print(f"  [session] id {session_id!r}")
+    CURRENT_SESSION_FILE.write_text(str(os.getpid()))
+
+    if record:
+        RECORDINGS_DIR.mkdir(exist_ok=True)
+        mic_path = RECORDINGS_DIR / f"{session_id}_mic.wav"
+        agent_path = RECORDINGS_DIR / f"{session_id}_agent.wav"
+        audio_interface = RecordingAudioInterface(mic_path, agent_path)
+    else:
+        audio_interface = DefaultAudioInterface()
+
     client = ElevenLabs(api_key=API_KEY)
     conversation = Conversation(
         client,
         AGENT_ID,
         requires_auth=True,
-        audio_interface=DefaultAudioInterface(),
+        audio_interface=audio_interface,
         config=build_config(riddle),
         client_tools=make_client_tools(riddle["answer"]),
         callback_agent_response=lambda resp: print(f"☠ Captain: {resp}"),
@@ -175,12 +254,18 @@ def run_kid_session(riddle: dict) -> None:
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
-        conversation.end_session()
+        conversation.end_session()  # blocks until audio_interface.stop() finishes (closes WAV files if recording)
+        if record:
+            print(f"  [recording] mic:   {mic_path}")
+            print(f"  [recording] agent: {agent_path}")
 
 
 if __name__ == "__main__":
+    args = parse_args()
     riddle = pick_riddle()
     print(f"🗡  This kid's riddle: {riddle['riddle']}")
     print(f"    Answer (ssh, don't tell): {riddle['answer']}")
+    if args.record:
+        print("    Recording this session to recordings/.")
     print("    Talk to the Captain! Ctrl-C when the kid walks off.\n")
-    run_kid_session(riddle)
+    run_kid_session(riddle, record=args.record)

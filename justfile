@@ -22,5 +22,12 @@ kiosk:
     .venv/bin/python pirate_kiosk.py
 
 # One kid's session, riddle mode: picks a riddle instead of a bare password.
-riddle-kiosk:
-    .venv/bin/python pirate_riddle_kiosk.py
+# Pass --record to also save mic + agent audio to recordings/ (off by default).
+riddle-kiosk *args:
+    .venv/bin/python pirate_riddle_kiosk.py {{args}}
+
+# Force-quit a wedged riddle-kiosk session from a second terminal — sends it
+# the same SIGINT Ctrl-C would. Normal "kid walked off" case is just Ctrl-C
+# in the kiosk's own terminal; this is the break-glass fallback.
+kill-riddle-kiosk:
+    kill -INT "$(cat current_riddle_kiosk.pid)"

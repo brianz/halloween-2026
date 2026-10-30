@@ -53,6 +53,29 @@ boosts every riddle's answer words. Shares the same ElevenLabs agent and
 `check_guess` client tool as the password game — only the kiosk script and
 prompt file differ.
 
+`pirate_riddle_kiosk.py` and `temporal_riddle_kiosk/kiosk_client.py` are
+meant to operate identically from the operator's side — same controls, same
+recordings — the Temporal version only changes *where guess-checking state
+lives*, not how you run or control a session:
+- **Recording:** off by default; pass `--record` to either script (e.g.
+  `just riddle-kiosk --record`, `just kiosk --record` from
+  `temporal_riddle_kiosk/`) to turn it on for that one session. When on,
+  both run a `RecordingAudioInterface` (subclass of the SDK's
+  `DefaultAudioInterface`) that tees every raw PCM chunk to two local WAV
+  files per session — `recordings/<session-id>_mic.wav` (the kid) and
+  `..._agent.wav` (the Captain) — written as soon as `end_session()`
+  returns, no dependency on ElevenLabs' own call-recording/retention
+  settings. `<session-id>` is a `riddle-session-<uuid>` for the plain
+  kiosk, `riddle-game-<uuid>` (the Temporal workflow id) for the Temporal
+  one.
+- **Force-quitting a wedged session:** Ctrl-C is the normal path for both.
+  If the kiosk process itself won't respond to Ctrl-C in its own terminal,
+  the plain kiosk drops its pid in `current_riddle_kiosk.pid` so
+  `just kill-riddle-kiosk` can send it the same SIGINT from a second
+  terminal; the Temporal kiosk drops its workflow id in
+  `temporal_riddle_kiosk/current_workflow.txt` so `just kill` (run from
+  that directory) can terminate the workflow directly.
+
 ## Files
 
 | File | Role |
@@ -73,9 +96,11 @@ prompt file differ.
 ## Commands
 
 ```bash
-just deps           # uv sync — install elevenlabs[pyaudio] into .venv
-just kiosk          # one kid's session, password mode (mic + speakers); Ctrl-C to end, rerun for next kid
-just riddle-kiosk    # one kid's session, riddle mode
+just deps                   # uv sync — install elevenlabs[pyaudio] into .venv
+just kiosk                  # one kid's session, password mode (mic + speakers); Ctrl-C to end, rerun for next kid
+just riddle-kiosk           # one kid's session, riddle mode
+just riddle-kiosk --record  # same, but also save mic + agent audio to recordings/ (off by default)
+just kill-riddle-kiosk      # force-quit a wedged riddle-kiosk session from a second terminal (same SIGINT as Ctrl-C)
 ```
 
 Raw: `.venv/bin/python pirate_kiosk.py` / `.venv/bin/python pirate_riddle_kiosk.py`

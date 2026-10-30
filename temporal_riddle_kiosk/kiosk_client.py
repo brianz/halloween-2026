@@ -24,16 +24,22 @@ Prerequisites (see README.md):
   - `python worker.py` running
   - ELEVEN_LABS_API_KEY set
 
-Run:  .venv/bin/python kiosk_client.py
+Run:  .venv/bin/python kiosk_client.py [--record]
 Stop: Ctrl-C ends the session (next kid = run it again).
+
+Pass --record to write two local WAV files to recordings/ for the session —
+the kid's mic input and the Captain's TTS output, named by the workflow id.
+Off by default. See RecordingAudioInterface below.
 """
 
+import argparse
 import asyncio
 import os
 import sys
 import threading
 import time
 import uuid
+import wave
 from pathlib import Path
 
 from elevenlabs.client import ElevenLabs
@@ -59,10 +65,52 @@ TASK_QUEUE = "pirate-riddle-task-queue"
 # second terminal without copy-pasting a uuid out of scrollback.
 CURRENT_WORKFLOW_FILE = Path(__file__).with_name("current_workflow.txt")
 
+RECORDINGS_DIR = Path(__file__).with_name("recordings")
+
 FIRST_MESSAGE = (
     "[chuckles] Well, well... another landlubber washes up on me shore. "
     "I be Captain Barnaby Bones! What be yer name, little matey?"
 )
+
+
+# --- Recording mic input + agent output to local WAV files -----------------
+#
+# DefaultAudioInterface already receives every raw PCM chunk going in each
+# direction (16-bit mono, 16kHz — see its INPUT/OUTPUT constants); this just
+# tees each chunk to a WAV file before handing it on, so no extra network
+# calls or re-encoding. Two mono files rather than one stereo mix, since mic
+# and agent audio arrive on independent threads with no shared clock to
+# interleave them against — ffmpeg can merge them afterward if a single file
+# is wanted (see README.md).
+
+
+class RecordingAudioInterface(DefaultAudioInterface):
+    SAMPLE_RATE = 16000
+
+    def __init__(self, mic_path: Path, agent_path: Path) -> None:
+        super().__init__()
+        self._mic_wav = self._open_wav(mic_path)
+        self._agent_wav = self._open_wav(agent_path)
+
+    def _open_wav(self, path: Path) -> wave.Wave_write:
+        w = wave.open(str(path), "wb")
+        w.setnchannels(1)
+        w.setsampwidth(2)  # paInt16
+        w.setframerate(self.SAMPLE_RATE)
+        return w
+
+    def _in_callback(self, in_data, frame_count, time_info, status):
+        self._mic_wav.writeframes(in_data)
+        return super()._in_callback(in_data, frame_count, time_info, status)
+
+    def output(self, audio: bytes) -> None:
+        self._agent_wav.writeframes(audio)
+        super().output(audio)
+
+    def stop(self) -> None:
+        super().stop()
+        self._mic_wav.close()
+        self._agent_wav.close()
 
 
 # --- Bridging sync ElevenLabs callbacks to the async Temporal client -------
@@ -169,15 +217,33 @@ def make_client_tools(bridge: TemporalBridge, handle: WorkflowHandle):
     return tools
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--record",
+        action="store_true",
+        help="Record this session's mic input and agent output to recordings/ (off by default)",
+    )
+    return parser.parse_args()
+
+
 def run_kid_session(
-    bridge: TemporalBridge, handle: WorkflowHandle, riddle: RiddleDef
+    bridge: TemporalBridge, handle: WorkflowHandle, riddle: RiddleDef, record: bool = False
 ) -> None:
+    if record:
+        RECORDINGS_DIR.mkdir(exist_ok=True)
+        mic_path = RECORDINGS_DIR / f"{handle.id}_mic.wav"
+        agent_path = RECORDINGS_DIR / f"{handle.id}_agent.wav"
+        audio_interface = RecordingAudioInterface(mic_path, agent_path)
+    else:
+        audio_interface = DefaultAudioInterface()
+
     client = ElevenLabs(api_key=API_KEY)
     conversation = Conversation(
         client,
         AGENT_ID,
         requires_auth=True,
-        audio_interface=DefaultAudioInterface(),
+        audio_interface=audio_interface,
         config=build_config(riddle),
         client_tools=make_client_tools(bridge, handle),
         callback_agent_response=lambda resp: print(f"☠ Captain: {resp}"),
@@ -189,7 +255,10 @@ def run_kid_session(
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
-        conversation.end_session()
+        conversation.end_session()  # blocks until audio_interface.stop() finishes (closes WAV files if recording)
+        if record:
+            print(f"  [recording] mic:   {mic_path}")
+            print(f"  [recording] agent: {agent_path}")
         try:
             bridge.run(handle.signal(RiddleGameWorkflow.end_session))
         except Exception:
@@ -206,12 +275,15 @@ def run_kid_session(
 
 
 if __name__ == "__main__":
+    args = parse_args()
     bridge = TemporalBridge()
     handle, riddle = start_game(bridge)
     print(f"🗡  This kid's riddle (difficulty {riddle.difficulty}/5): {riddle.riddle}")
     print(f"    Answer (ssh, don't tell): {riddle.answer}")
+    if args.record:
+        print("    Recording this session to recordings/.")
     print("    Talk to the Captain! Ctrl-C when the kid walks off.\n")
     try:
-        run_kid_session(bridge, handle, riddle)
+        run_kid_session(bridge, handle, riddle, record=args.record)
     finally:
         bridge.stop()
