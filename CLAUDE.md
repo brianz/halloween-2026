@@ -136,6 +136,19 @@ Raw: `.venv/bin/python pirate_kiosk.py` / `.venv/bin/python pirate_riddle_kiosk.
   / `signal` handling like `pirate_kiosk.py` does.
 - Each audio tag colors only ~4-5 words of speech; cap them at 1-2 per line.
 - Port 8000 on this machine is taken by an unrelated project (picklecraft).
+- `pirate_riddle_prompt_temporal.txt` originally kept the plain kiosk's
+  `turn 6 or later: reveal the answer` rule from `pirate_riddle_prompt.txt`
+  — which is load-bearing there (no guess cap exists in that version, so
+  it's the only thing that ends a losing game) but was a live bug once
+  copied into the Temporal version: the agent could reveal the answer and
+  hang up purely on turn count, without ever calling `check_guess` with a
+  final result, leaving the workflow stuck in `outcome="playing"` forever
+  (confirmed against a real workflow: `outcome="abandoned"` with only 4 of
+  5 guesses used, and a `WorkflowExecutionSignaled`/Ctrl-C the only thing
+  that ever closed it). Fixed by making reveal strictly conditional on
+  `check_guess` returning "correct" or "out_of_guesses" — never on turn
+  count — in the Temporal prompt only; the plain prompt is unaffected and
+  intentionally different.
 
 ## Other subprojects
 
