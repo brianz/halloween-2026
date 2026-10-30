@@ -31,3 +31,11 @@ riddle-kiosk *args:
 # in the kiosk's own terminal; this is the break-glass fallback.
 kill-riddle-kiosk:
     kill -INT "$(cat current_riddle_kiosk.pid)"
+
+# ---- diagnostics -------------------------------------------------------------
+
+# Record a few seconds from the default mic and report its peak level — no
+# ElevenLabs, no Temporal, just PortAudio. Use this to isolate a mic problem
+# from the kiosk/ElevenLabs stack. See mic_test.py for what it checks.
+mic-test *args:
+    .venv/bin/python mic_test.py {{args}}
