@@ -21,3 +21,9 @@ worker:
 # One kid's session: mic + speakers, Ctrl-C to end, rerun for next kid
 kiosk:
     .venv/bin/python kiosk_client.py
+
+# Force-terminate the in-progress game from a second terminal — for when the
+# kiosk process itself is wedged and Ctrl-C in terminal 3 won't land. Normal
+# "kid walked off" case is just Ctrl-C; this is the break-glass fallback.
+kill:
+    temporal workflow terminate --workflow-id "$(cat current_workflow.txt)" --reason "kiosk force-killed"

@@ -1,8 +1,14 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # Haunted Pirates — Captain Barnaby Bones
 
-Voice password game for a Halloween trick-or-treat kiosk. A kid talks to
+Voice password/riddle game for a Halloween trick-or-treat kiosk. A kid talks to
 "Captain Barnaby Bones," a ghost pirate; after a few turns he reveals a
-password the kid brings to a treasure chest for candy.
+password (or the kid solves a riddle) that's brought to a treasure chest for
+candy. The repo also has two unrelated ESP32 hardware props (lit treasure
+chests) and a Temporal-based thought exercise — see "Other subprojects" below.
 
 ## Architecture (the point of this project — keep it this way)
 
@@ -37,12 +43,25 @@ password the kid brings to a treasure chest for candy.
   direnv var `ELEVEN_LABS_AGENT_KEY_ID` misleadingly holds an API *key* id —
   it is unused by the kiosk.
 
+### Riddle mode variant
+
+`pirate_riddle_kiosk.py` + `pirate_riddle_prompt.txt` are the same
+architecture as above, but the kid solves a riddle instead of guessing a
+bare password: `RIDDLE_POOL` holds `{riddle, answer}` pairs, `check_guess`
+word-matches against the chosen riddle's `answer`, and the ASR override
+boosts every riddle's answer words. Shares the same ElevenLabs agent and
+`check_guess` client tool as the password game — only the kiosk script and
+prompt file differ.
+
 ## Files
 
 | File | Role |
 | --- | --- |
-| `pirate_kiosk.py` | One kid's session: pick password, start Conversation with overrides + ASR keywords, register `check_guess`, print transcript to stdout |
-| `pirate_prompt.txt` | The full system prompt (persona, clue ladder, reveal rules, audio-tag whitelist). The single source of truth for agent behavior |
+| `pirate_kiosk.py` | One kid's session (password mode): pick password, start Conversation with overrides + ASR keywords, register `check_guess`, print transcript to stdout |
+| `pirate_prompt.txt` | System prompt for password mode (persona, clue ladder, reveal rules, audio-tag whitelist) |
+| `pirate_riddle_kiosk.py` | One kid's session (riddle mode): same flow as `pirate_kiosk.py`, but picks a riddle and matches on its answer |
+| `pirate_riddle_prompt.txt` | System prompt for riddle mode |
+| `barnaby_tts.py` | One-off script to render arbitrary text to an mp3 via ElevenLabs' plain TTS API (not the hosted agent) — ad-hoc voice testing, not used by either kiosk |
 
 ## Environment variables
 
@@ -54,11 +73,12 @@ password the kid brings to a treasure chest for candy.
 ## Commands
 
 ```bash
-just deps     # uv sync — install elevenlabs[pyaudio] into .venv
-just kiosk    # one kid's session (mic + speakers); Ctrl-C to end, rerun for next kid
+just deps           # uv sync — install elevenlabs[pyaudio] into .venv
+just kiosk          # one kid's session, password mode (mic + speakers); Ctrl-C to end, rerun for next kid
+just riddle-kiosk    # one kid's session, riddle mode
 ```
 
-Raw: `.venv/bin/python pirate_kiosk.py`
+Raw: `.venv/bin/python pirate_kiosk.py` / `.venv/bin/python pirate_riddle_kiosk.py`
 
 ## One-time agent setup (already done, via API — don't redo)
 
@@ -81,3 +101,24 @@ Raw: `.venv/bin/python pirate_kiosk.py`
   / `signal` handling like `pirate_kiosk.py` does.
 - Each audio tag colors only ~4-5 words of speech; cap them at 1-2 per line.
 - Port 8000 on this machine is taken by an unrelated project (picklecraft).
+
+## Other subprojects
+
+- **`gold-chest-lights/`** and **`gold-chest-lights-rgb/`** — two unrelated
+  ESP32 + MicroPython props, each a slow amber "breathing" pulse for a
+  treasure chest (WS2812B strip and a DotStar/APA102 strip respectively, on
+  separate boards). No ASR/TTS, no ElevenLabs — they share this repo's root
+  `.venv` only for the `esptool`/`mpremote` flashing CLIs. Each has its own
+  `CLAUDE.md` and `README.md` with wiring and upload steps; read those
+  before touching either directory.
+- **`temporal_riddle_kiosk/`** — started as a thought exercise, now the
+  version actually run on the night. Same riddle game and hosted ElevenLabs
+  agent as `pirate_riddle_kiosk.py`, but guess-checking lives in a Temporal
+  Workflow (via Workflow Updates) instead of a local Python closure. Run
+  entirely on one laptop: `temporal server start-dev`, `worker.py`, and
+  `kiosk_client.py` are three local terminals (server + worker left running
+  all night, kiosk restarted per kid). Has its own
+  `pyproject.toml`/`.venv`/`justfile`, independent of the root project. See
+  its `README.md` for the full runbook, including `just kill` to
+  force-terminate a stuck kid's game from a second terminal.
+</content>

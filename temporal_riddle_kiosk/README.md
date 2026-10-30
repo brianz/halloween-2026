@@ -1,12 +1,16 @@
-# Riddle kiosk, Temporal edition (thought exercise)
+# Riddle kiosk, Temporal edition
 
-This is **not** a replacement for `../pirate_riddle_kiosk.py` — the top-level
-`CLAUDE.md` already explains why a batch/local orchestration loop was tried
-and retired (seconds of serial latency per turn). ElevenLabs' hosted agent
-still does all ASR/TTS/voice here, same as the real kiosk. What's different
-is *where the game's state machine lives*: instead of a Python closure
-matching guesses in-process, each guess is a **Temporal Workflow Update**
-against a workflow running on a local dev server.
+This started as a thought exercise and is now the version actually run on
+the night. It is not a different voice pipeline from `../pirate_riddle_kiosk.py`
+— the top-level `CLAUDE.md` already explains why a batch/local orchestration
+loop was tried and retired (seconds of serial latency per turn), and
+ElevenLabs' hosted agent still does all ASR/TTS/voice here, same as the
+plain kiosk. What's different is *where the game's state machine lives*:
+instead of a Python closure matching guesses in-process, each guess is a
+**Temporal Workflow Update** against a workflow running on a local dev
+server — which is also what makes "force-quit this one kid's game without
+touching anything else" a clean operation (see "Running it" below) rather
+than something you'd have to hand-roll.
 
 ## Why try this
 
@@ -29,24 +33,26 @@ to hand-roll or simply doesn't have:
   outcome — from a different terminal while it's in progress. The plain
   kiosk only has whatever you can read off stdout.
 
-## Why it's still just a thought exercise, not a kiosk upgrade
+## Trade-offs vs. the plain kiosk
 
 - It adds two more long-running local processes (`temporal server
   start-dev`, `worker.py`) that have to be up before the first trick-or-treater
   rings the bell, and that need their own "is this still alive" monitoring
-  on the night of.
+  on the night of. Running everything on one laptop (server, worker, and the
+  kiosk client all local) keeps that monitoring to "are these two terminals
+  still there."
 - It does **not** reduce ASR/TTS latency — that was never the bottleneck
   here; the hosted agent already handles it well. Everything Temporal buys
-  above is about durability and observability of the *guess-checking* logic,
-  which was already fast and already correct in the plain-Python version.
+  here is durability and observability of the *guess-checking* logic, plus
+  an operational win that matters for running this live: a clean,
+  immediate way to kill one kid's game without touching the other
+  processes (see "Running it" below).
 - It adds a real wrinkle: ElevenLabs' `Conversation` runs its own event loop
   and calls `check_guess` synchronously from its own thread, so
   `kiosk_client.py` has to bridge into a separate asyncio loop for every
   Temporal call (`TemporalBridge` in `kiosk_client.py`). That's inherent
   complexity the plain kiosk doesn't have, because its guess-checking is
   just a local function call.
-
-In short: worth knowing how it'd look, not worth running on Halloween night.
 
 ## Architecture
 
@@ -97,6 +103,33 @@ just server            # terminal 1: temporal server start-dev
 just worker            # terminal 2: the worker process
 ELEVEN_LABS_API_KEY=... just kiosk   # terminal 3: one kid's session
 ```
+
+All on one laptop: `temporal server start-dev` and `worker.py` are started
+once and left running for the whole night; only `kiosk_client.py` (terminal
+3) is restarted per kid. Only run one `kiosk_client.py` at a time — it's
+built as "one process = one kid's game," not a server that handles several
+kids concurrently.
+
+Mic control (on/off between kids) is left to normal macOS input device
+settings — `DefaultAudioInterface` just opens whatever the OS's default
+input device is, there's nothing kiosk-specific to toggle.
+
+**Ending a kid's game and resetting for the next one:**
+- Normal case (kid finishes, or walks away): Ctrl-C in the kiosk terminal.
+  This ends the ElevenLabs session and signals `end_session` to the
+  workflow, which finishes it immediately (`outcome="abandoned"` if it
+  wasn't already won) instead of idling out the 10-minute timeout.
+- Then just rerun `just kiosk` — it starts a brand-new
+  `riddle-game-<uuid>` workflow with fresh state, same "one process per
+  kid" guarantee as the plain kiosk.
+- If the kiosk process itself is wedged and Ctrl-C in its terminal won't
+  land, force-terminate the in-progress game from a second terminal:
+  ```bash
+  just kill
+  ```
+  (reads the workflow id `kiosk_client.py` wrote to `current_workflow.txt`
+  at session start, same uuid it printed to stdout). Then kill/restart the
+  stuck kiosk process and rerun `just kiosk`.
 
 Watch a game live while it's running:
 

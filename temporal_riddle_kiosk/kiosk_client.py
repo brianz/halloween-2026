@@ -54,6 +54,11 @@ if not API_KEY:
 TEMPORAL_TARGET = os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
 TASK_QUEUE = "pirate-riddle-task-queue"
 
+# Overwritten with the live workflow id at the start of every kid's session,
+# so `just kill` (see justfile) can force-terminate the current game from a
+# second terminal without copy-pasting a uuid out of scrollback.
+CURRENT_WORKFLOW_FILE = Path(__file__).with_name("current_workflow.txt")
+
 FIRST_MESSAGE = (
     "[chuckles] Well, well... another landlubber washes up on me shore. "
     "I be Captain Barnaby Bones! What be yer name, little matey?"
@@ -97,6 +102,7 @@ def start_game(bridge: TemporalBridge) -> tuple[WorkflowHandle, RiddleDef]:
         )
     )
     print(f"  [temporal] started workflow {workflow_id!r}")
+    CURRENT_WORKFLOW_FILE.write_text(workflow_id)
 
     # The riddle is picked inside the workflow's first task, not by this
     # script — poll briefly until it's visible via query.

@@ -1,2 +1,3 @@
 .venv/
 guess_log.jsonl
+current_workflow.txt
