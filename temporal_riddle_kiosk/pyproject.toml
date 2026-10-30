@@ -1,0 +1,9 @@
+[project]
+name = "pirate-riddle-temporal"
+version = "0.1.0"
+description = "Thought exercise: the riddle kiosk's game logic as a Temporal workflow"
+requires-python = ">=3.12"
+dependencies = [
+    "elevenlabs[pyaudio]>=2.66",
+    "temporalio>=1.9",
+]
