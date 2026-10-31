@@ -185,8 +185,10 @@ Raw: `.venv/bin/python pirate_kiosk.py` / `.venv/bin/python pirate_riddle_kiosk.
   Workflow (via Workflow Updates) instead of a local Python closure. Run
   entirely on one laptop: `temporal server start-dev`, `worker.py`, and
   `kiosk_client.py` are three local terminals (server + worker left running
-  all night, kiosk restarted per kid). Has its own
-  `pyproject.toml`/`.venv`/`justfile`, independent of the root project. See
-  its `README.md` for the full runbook, including `just kill` to
-  force-terminate a stuck kid's game from a second terminal.
+  all night, kiosk restarted per kid). Shares the root project's venv and
+  `uv.lock` (one `uv sync` at the repo root installs `temporalio` alongside
+  everything else); has its own `justfile` only, with `worker`/`kiosk`
+  recipes invoking `../.venv/bin/python`. See its `README.md` for the full
+  runbook, including `just kill` to force-terminate a stuck kid's game from
+  a second terminal.
 </content>

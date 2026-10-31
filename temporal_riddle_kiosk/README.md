@@ -93,12 +93,11 @@ Temporal dev server (localhost:7233)
 
 ## Running it
 
-Needs the Temporal CLI (`brew install temporal`) and its own venv (kept
-separate from the root project's — see this directory's `pyproject.toml`).
+Needs the Temporal CLI (`brew install temporal`). Python deps live in the
+root project's `pyproject.toml`/`uv.lock` and venv — run `just deps` from
+the repo root (not this directory) to install them.
 
 ```bash
-just deps              # uv sync — installs temporalio + elevenlabs here
-
 just server            # terminal 1: temporal server start-dev
 just worker            # terminal 2: the worker process
 ELEVEN_LABS_API_KEY=... just kiosk            # terminal 3: one kid's session

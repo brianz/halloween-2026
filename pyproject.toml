@@ -7,6 +7,7 @@ dependencies = [
     "elevenlabs[pyaudio]>=2.66",
     "esptool>=5.5.0",
     "mpremote>=1.29.0",
+    "temporalio>=1.9",
 ]
 
 [tool.pytest.ini_options]

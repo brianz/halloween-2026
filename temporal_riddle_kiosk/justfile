@@ -1,14 +1,10 @@
-# Temporal riddle-kiosk thought exercise — own venv, own deps, separate
-# from the root project's `just` recipes.
+# Temporal riddle-kiosk thought exercise — shares the root project's venv
+# and uv.lock; only the `just` recipes are separate.
 
 default: list
 
 list:
     @just --list
-
-# Sync Python deps from this directory's pyproject.toml into its own venv
-deps:
-    uv sync
 
 # Start the local Temporal dev server (separate terminal, leave running)
 server:
@@ -16,12 +12,12 @@ server:
 
 # Start the worker (separate terminal, leave running)
 worker:
-    .venv/bin/python worker.py
+    {{justfile_directory()}}/../.venv/bin/python worker.py
 
 # One kid's session: mic + speakers, Ctrl-C to end, rerun for next kid.
 # Pass --record to also save mic + agent audio to recordings/ (off by default).
 kiosk *args:
-    .venv/bin/python kiosk_client.py {{args}}
+    {{justfile_directory()}}/../.venv/bin/python kiosk_client.py {{args}}
 
 # Force-terminate the in-progress game from a second terminal — for when the
 # kiosk process itself is wedged and Ctrl-C in terminal 3 won't land. Normal
