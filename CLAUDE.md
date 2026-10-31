@@ -96,9 +96,15 @@ lives*, not how you run or control a session:
   the agent has no reason to call `end_call` for at all ("timed_out"/kid
   walked away, "abandoned"/operator's Ctrl-C). `pirate_riddle_kiosk.py`'s
   `watch_for_game_end` is the same idea without Temporal: a daemon thread
-  polling local `state`, force-ending the session `END_CALL_GRACE_SECONDS`
-  after the outcome is decided if nothing else has by then (added
-  2026-10-30 after a real test hit exactly this gap — see gotchas).
+  polling local `state`, force-ending the session once the outcome is
+  decided and nothing else has ended it (added 2026-10-30 after a real
+  test hit exactly this gap — see gotchas). Unlike the Temporal kiosk's
+  flat grace period, it doesn't guess a delay: `TimingAudioInterface`
+  turns each audio chunk's byte length into an exact playback duration,
+  so the watcher waits for the Captain's queued speech to actually
+  finish (plus a short settle period) before hanging up — immune to a
+  longer reveal line getting cut off, or a short one leaving needless
+  dead air.
   `pirate_prompt.txt` (password mode) still explicitly tells the agent
   never to call `end_call` — enabling the tool is agent-wide (see gotcha
   below), not per-script, and that script wasn't part of this change.
@@ -173,12 +179,28 @@ Raw: `.venv/bin/python pirate_kiosk.py` / `.venv/bin/python pirate_riddle_kiosk.
   and nothing nudges it afterward since the kid has no reason to guess
   again). Fixed by porting the Temporal kiosk's watcher pattern:
   `watch_for_game_end` polls local `state` in a daemon thread and
-  force-ends the session if it's still open `END_CALL_GRACE_SECONDS`
-  (8s) after the outcome is decided. This also meant `end_call`, the
-  watcher, and Ctrl-C could now all reach `end_session()` on the same
-  session — guarded `run_kid_session`'s own call with
-  `if not session_ended.is_set()` so a second real call never hits an
-  already-closed pyaudio stream.
+  force-ends the session once the outcome is decided, if nothing else
+  has by then. This also meant `end_call`, the watcher, and Ctrl-C
+  could now all reach `end_session()` on the same session — guarded
+  `run_kid_session`'s own call with `if not session_ended.is_set()` so
+  a second real call never hits an already-closed pyaudio stream.
+  **Update:** the first version of this fix used a flat 8s delay
+  (`END_CALL_GRACE_SECONDS`) before forcing the session closed —
+  flagged in review as having the exact same flaw as a too-short
+  timeout: a longer reveal line's audio could still get cut off if it
+  took longer than 8s to play. Replaced with `TimingAudioInterface`,
+  which turns each `output()` chunk's byte length into an exact
+  playback duration and tracks `busy_until` — when all currently-queued
+  audio will actually finish — so the watcher waits for that instead of
+  guessing. This needed two phases, not one: right after the outcome is
+  decided there's no queued audio yet either way, since the LLM + TTS
+  haven't produced the reveal line yet, so checking `still_speaking()`
+  immediately would end the call before the reveal even starts (caught
+  via a unit test: the naive one-phase version ended a fake session
+  after ~0.6s instead of waiting for ~4s of simulated audio). Fixed by
+  first waiting for a chunk to actually arrive after the outcome was
+  decided (`SPEECH_START_TIMEOUT_SECONDS`, bounded), and only then
+  treating "queue empty" as "finished" rather than "hasn't begun".
 - **2026-10-30: `worker.py` doesn't hot-reload** — it imports `models.py`/
   `workflows.py`/`activities.py` once at startup, so an edit to any of them
   (e.g. changing `MAX_GUESSES`) has no effect on games started against an
