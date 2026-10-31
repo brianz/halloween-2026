@@ -13,7 +13,7 @@ chests) and a Temporal-based thought exercise — see "Other subprojects" below.
 ## Architecture (the point of this project — keep it this way)
 
 - **The ElevenLabs hosted Conversational AI agent does ASR + TTS + voice**
-  (`eleven_v3_conversational`, custom voice `TG2O4Qh067u8gMkJrjhR`, LLM
+  (`eleven_v4_turbo`, custom voice `TG2O4Qh067u8gMkJrjhR`, LLM
   `claude-haiku-4-5`). It runs in the ElevenLabs cloud — realtime streaming,
   interruption handling, good latency. We do NOT run local ASR/TTS loops.
   (Earlier iterations did: ElevenLabs Speech-Engine sketch, then a Scribe
@@ -124,6 +124,26 @@ Raw: `.venv/bin/python pirate_kiosk.py` / `.venv/bin/python pirate_riddle_kiosk.
 
 ## Gotchas learned the hard way
 
+- **2026-10-30: switched the agent's TTS model from `eleven_v3_conversational`
+  to `eleven_v4_turbo`** (ElevenLabs' v3 → v4 upgrade; v4 Turbo is the variant
+  tuned for agents/real-time, ~100ms median inference latency, more reliable
+  audio-tag following). Done via a one-off `PATCH
+  /v1/convai/agents/{agent_id}` with `conversation_config.tts.model_id`
+  (same "already done, via API" category as the rest of "One-time agent
+  setup" below — not something `pirate_kiosk.py` sets in code, since the
+  kiosk's `conversation_config_override` only ever touches prompt/first
+  message/ASR keywords). Verified with a scripted text-only session
+  (`send_user_message` + `audio_interface=None`, two wrong guesses then a
+  correct one) and a second run swapping in a file-writing `AudioInterface`
+  to capture the real `eleven_v4_turbo` audio — both came back indistinguishable
+  from v3 in game logic (clue ladder, `check_guess` short-circuit, audio-tag
+  whitelist all intact). Left `expressive_mode: true` and
+  `enable_phoneme_tags: true` as-is on the agent even though both were
+  v3-specific settings per ElevenLabs' docs (expressive mode defaults on for
+  v3 Conversational; phoneme tags are documented as only compatible with
+  `eleven_flash_v2`, v4 uses slash-wrapped IPA instead) — neither appeared to
+  cause problems, but they're the first things to check if audio behaves
+  oddly.
 - The agent-scoped API key can't read/write agents unless **ElevenAgents
   Read/Write** is enabled on it (the console's no-code view hid all of:
   dynamic variables, overrides, client tools — that's why the hosted agent
