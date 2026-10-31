@@ -59,15 +59,21 @@ recordings — the Temporal version only changes *where guess-checking state
 lives*, not how you run or control a session:
 - **Recording:** off by default; pass `--record` to either script (e.g.
   `just riddle-kiosk --record`, `just kiosk --record` from
-  `temporal_riddle_kiosk/`) to turn it on for that one session. When on,
-  both run a `RecordingAudioInterface` (subclass of the SDK's
-  `DefaultAudioInterface`) that tees every raw PCM chunk to two local WAV
-  files per session — `recordings/<session-id>_mic.wav` (the kid) and
-  `..._agent.wav` (the Captain) — written as soon as `end_session()`
-  returns, no dependency on ElevenLabs' own call-recording/retention
-  settings. `<session-id>` is a `riddle-session-<uuid>` for the plain
-  kiosk, `riddle-game-<uuid>` (the Temporal workflow id) for the Temporal
-  one.
+  `temporal_riddle_kiosk/`) to turn it on for that one session. Both run a
+  `RecordingAudioInterface` (subclass of the SDK's `DefaultAudioInterface`)
+  that tees every raw PCM chunk to `recordings/<session-id>.wav`-ish paths,
+  written as soon as `end_session()` returns, no dependency on ElevenLabs'
+  own call-recording/retention settings. `<session-id>` is a
+  `riddle-session-<uuid>` for the plain kiosk, `riddle-game-<uuid>` (the
+  Temporal workflow id) for the Temporal one. **Diverges since 2026-10-30:**
+  `pirate_riddle_kiosk.py` writes ONE stereo file,
+  `recordings/<session-id>.wav` — left channel the kid's mic, right
+  channel the Captain — with each chunk timestamped against session start
+  and silence-padded into position before merging (mic input is
+  continuous; agent TTS output only arrives in bursts while it's actually
+  talking, so the two have no shared clock to interleave against safely).
+  `temporal_riddle_kiosk/kiosk_client.py` still writes two separate mono
+  files (`..._mic.wav` / `..._agent.wav`) — not yet ported.
 - **Force-quitting a wedged session:** Ctrl-C is the normal path for both.
   If the kiosk process itself won't respond to Ctrl-C in its own terminal,
   the plain kiosk drops its pid in `current_riddle_kiosk.pid` so

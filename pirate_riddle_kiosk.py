@@ -31,16 +31,20 @@ Stop: the agent hangs up on its own once the game ends (correct guess or
       SIGINT from the process id this script drops in
       current_riddle_kiosk.pid at startup.
 
-Pass --record to write two local WAV files to recordings/ for the session —
-the kid's mic input and the Captain's TTS output, named by that session's
-id. Off by default. See RecordingAudioInterface below.
+Pass --record to write one local stereo WAV file to recordings/ for the
+session — left channel the kid's mic, right channel the Captain's TTS
+output — named by that session's id. Off by default. See
+RecordingAudioInterface below.
 """
 
 import argparse
+import array
 import os
 import random
 import re
 import sys
+import threading
+import time
 import uuid
 import wave
 from pathlib import Path
@@ -217,45 +221,78 @@ def _guess_correct(guess: str, answer: str) -> bool:
     return any(g_words[i : i + n] == a_words for i in range(len(g_words) - n + 1))
 
 
-# --- Recording mic input + agent output to local WAV files -----------------
+# --- Recording mic input + agent output to a single stereo WAV file -------
 #
 # DefaultAudioInterface already receives every raw PCM chunk going in each
-# direction (16-bit mono, 16kHz — see its INPUT/OUTPUT constants); this just
-# tees each chunk to a WAV file before handing it on, so no extra network
-# calls or re-encoding. Two mono files rather than one stereo mix, since mic
-# and agent audio arrive on independent threads with no shared clock to
-# interleave them against — ffmpeg can merge them afterward if a single file
-# is wanted.
+# direction (16-bit mono, 16kHz — see its INPUT/OUTPUT constants). Mic input
+# arrives continuously on one thread; agent TTS output arrives in bursts on
+# another thread, only while the agent is actually speaking — there's no
+# shared clock between them, so naively appending both streams into one file
+# as chunks arrive would interleave them in whatever order they happened to
+# land, scrambling both. Instead each chunk is timestamped against session
+# start and silence-padded into its correct position before being merged, so
+# the single output file's left (mic) and right (Captain) channels stay in
+# sync with when each side actually spoke.
 
 
 class RecordingAudioInterface(DefaultAudioInterface):
     SAMPLE_RATE = 16000
+    SAMPLE_WIDTH = 2  # 16-bit PCM, matches DefaultAudioInterface's formats
 
-    def __init__(self, mic_path: Path, agent_path: Path) -> None:
+    def __init__(self, output_path: Path) -> None:
         super().__init__()
-        self._mic_wav = self._open_wav(mic_path)
-        self._agent_wav = self._open_wav(agent_path)
-
-    def _open_wav(self, path: Path) -> wave.Wave_write:
-        w = wave.open(str(path), "wb")
-        w.setnchannels(1)
-        w.setsampwidth(2)  # paInt16
-        w.setframerate(self.SAMPLE_RATE)
-        return w
+        self._output_path = output_path
+        self._start_time = time.monotonic()
+        self._lock = threading.Lock()
+        self._mic_chunks: list[tuple[float, bytes]] = []
+        self._agent_chunks: list[tuple[float, bytes]] = []
 
     def _in_callback(self, in_data, frame_count, time_info, status):
-        self._mic_wav.writeframes(in_data)
-        self._agent_wav.writeframes(in_data)  # agent output is also fed to _in_callback
+        with self._lock:
+            self._mic_chunks.append((time.monotonic() - self._start_time, in_data))
         return super()._in_callback(in_data, frame_count, time_info, status)
 
     def output(self, audio: bytes) -> None:
-        self._agent_wav.writeframes(audio)
+        with self._lock:
+            self._agent_chunks.append((time.monotonic() - self._start_time, audio))
         super().output(audio)
 
     def stop(self) -> None:
         super().stop()
-        self._mic_wav.close()
-        self._agent_wav.close()
+        self._write_merged_file()
+
+    def _render_track(self, chunks: list[tuple[float, bytes]]) -> bytes:
+        """Lay chunks out at their recorded offset from session start,
+        silence-padding any gap — e.g. the agent going quiet while the kid
+        talks — instead of just concatenating them back to back."""
+        buf = bytearray()
+        for offset, data in chunks:
+            target_len = int(offset * self.SAMPLE_RATE) * self.SAMPLE_WIDTH
+            if target_len > len(buf):
+                buf.extend(b"\x00" * (target_len - len(buf)))
+            buf.extend(data)
+        return bytes(buf)
+
+    def _write_merged_file(self) -> None:
+        with self._lock:
+            mic_bytes = self._render_track(self._mic_chunks)
+            agent_bytes = self._render_track(self._agent_chunks)
+
+        mic_samples = array.array("h", mic_bytes)
+        agent_samples = array.array("h", agent_bytes)
+        n = max(len(mic_samples), len(agent_samples))
+        mic_samples.extend([0] * (n - len(mic_samples)))
+        agent_samples.extend([0] * (n - len(agent_samples)))
+
+        stereo = array.array("h", bytes(2 * self.SAMPLE_WIDTH * n))
+        stereo[0::2] = mic_samples  # left channel: the kid's mic
+        stereo[1::2] = agent_samples  # right channel: the Captain
+
+        with wave.open(str(self._output_path), "wb") as w:
+            w.setnchannels(2)
+            w.setsampwidth(self.SAMPLE_WIDTH)
+            w.setframerate(self.SAMPLE_RATE)
+            w.writeframes(stereo.tobytes())
 
 
 def parse_args() -> argparse.Namespace:
@@ -263,7 +300,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--record",
         action="store_true",
-        help="Record this session's mic input and agent output to recordings/ (off by default)",
+        help="Record this session to a stereo WAV file in recordings/ (off by default)",
     )
     return parser.parse_args()
 
@@ -273,13 +310,12 @@ def run_kid_session(riddle: dict, record: bool = False) -> None:
     print(f"  [session] id {session_id!r}")
     CURRENT_SESSION_FILE.write_text(str(os.getpid()))
 
-    mic_path = agent_path = ""
+    audio_path = ""
 
     if record:
         RECORDINGS_DIR.mkdir(exist_ok=True)
-        mic_path = RECORDINGS_DIR / f"{session_id}_mic.wav"
-        agent_path = RECORDINGS_DIR / f"{session_id}_agent.wav"
-        audio_interface = RecordingAudioInterface(mic_path, agent_path)
+        audio_path = RECORDINGS_DIR / f"{session_id}.wav"
+        audio_interface = RecordingAudioInterface(audio_path)
     else:
         audio_interface = DefaultAudioInterface()
 
@@ -301,10 +337,9 @@ def run_kid_session(riddle: dict, record: bool = False) -> None:
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
-        conversation.end_session()  # blocks until audio_interface.stop() finishes (closes WAV files if recording)
+        conversation.end_session()  # blocks until audio_interface.stop() finishes (writes the WAV file if recording)
         if record:
-            print(f"  [recording] mic:   {mic_path}")
-            print(f"  [recording] agent: {agent_path}")
+            print(f"  [recording] {audio_path}")
         print(
             f"  [session] outcome={state['outcome']!r} "
             f"guesses={state['guesses']!r}"
