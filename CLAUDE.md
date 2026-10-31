@@ -76,15 +76,22 @@ lives*, not how you run or control a session:
   `temporal_riddle_kiosk/current_workflow.txt` so `just kill` (run from
   that directory) can terminate the workflow directly.
 - **Known divergence:** `temporal_riddle_kiosk/kiosk_client.py` exits on
-  its own once the workflow ends, for any reason — a background watcher
-  (`watch_for_workflow_end`) waits on `handle.result()` and ends the
-  ElevenLabs session when it resolves: immediately on an abnormal end
-  (`just kill`), after a short grace period (`WORKFLOW_END_GRACE_SECONDS`)
-  on a clean finish (correct guess, out_of_guesses, timed_out) so the agent
-  gets to actually say the reveal line — workflow completion lands in the
-  same instant as the deciding guess, before the agent has said anything
-  about it. `pirate_riddle_kiosk.py` has no separate orchestration layer to
-  watch this way, so it still always needs an explicit Ctrl-C per session.
+  its own once the workflow ends, for any reason. On a correct guess or
+  out_of_guesses, the agent hangs up *itself*: `pirate_riddle_prompt_temporal.txt`
+  tells it to call the ElevenLabs built-in `end_call` tool right after
+  speaking the reveal, which closes the websocket and the SDK already
+  treats that as a normal `end_session()` — no guessing about TTS timing.
+  A background watcher (`watch_for_workflow_end`) is the fallback for paths
+  the agent has no reason to call `end_call` for — "timed_out" (kid walked
+  away) or "abandoned" (operator's Ctrl-C) — plus a backstop in case it
+  ever forgets to: it waits on `handle.result()` and ends the ElevenLabs
+  session when it resolves, immediately on an abnormal end (`just kill`),
+  after a short grace period (`WORKFLOW_END_GRACE_SECONDS`) on a clean
+  finish in case the agent is still mid-sentence. `pirate_riddle_kiosk.py`
+  has no separate orchestration layer to watch this way, so it still always
+  needs an explicit Ctrl-C per session — and its prompt (along with
+  `pirate_prompt.txt`) explicitly tells the agent never to call `end_call`,
+  since enabling the tool is agent-wide (see gotcha below), not per-script.
 
 ## Files
 
@@ -124,6 +131,31 @@ Raw: `.venv/bin/python pirate_kiosk.py` / `.venv/bin/python pirate_riddle_kiosk.
 
 ## Gotchas learned the hard way
 
+- **2026-10-30: enabled the agent's built-in `end_call` system tool** to
+  fix the Temporal kiosk never hanging up after a correct guess. The SDK's
+  `Conversation` has no "agent finished speaking" callback — only text
+  events (`agent_response`) and raw audio chunks — so there was no clean
+  signal for when it was safe to hang up after the reveal; the old fix was
+  a flat `WORKFLOW_END_GRACE_SECONDS` sleep guessing how long the line
+  would take to play. `end_call` is a real ElevenLabs system tool
+  (`BuiltInToolsInput.end_call` / `EndCallToolConfig` in the SDK types)
+  that lets the agent close the call itself once the LLM decides to invoke
+  it; ElevenLabs' orchestrator then closes the websocket, and the SDK's
+  `_run()` loop already treats `ConnectionClosedOK` as a normal
+  `end_session()` — so `wait_for_session_end()` returns the instant the
+  agent is actually done talking. Enabled via the same one-off `PATCH
+  /v1/convai/agents/{agent_id}` pattern as the TTS model switch below,
+  setting `conversation_config.agent.prompt.built_in_tools.end_call` with
+  `pre_tool_speech: "force"` (so it always speaks its line before hanging
+  up, never hangs up silently) — confirmed via GET afterward that
+  `check_guess` and the TTS config were untouched. **This is agent-level,
+  not per-session** — the password and plain riddle kiosks share this same
+  agent and would otherwise gain the ability to self-hang-up with no
+  prompt awareness of it, so `pirate_prompt.txt` and
+  `pirate_riddle_prompt.txt` both got an explicit "never call end_call"
+  line to keep them Ctrl-C-only, matching their existing design. Only
+  `pirate_riddle_prompt_temporal.txt` instructs the agent to call it (right
+  after the reveal line, correct or out_of_guesses).
 - **2026-10-30: switched the agent's TTS model from `eleven_v3_conversational`
   to `eleven_v4_turbo`** (ElevenLabs' v3 → v4 upgrade; v4 Turbo is the variant
   tuned for agents/real-time, ~100ms median inference latency, more reliable

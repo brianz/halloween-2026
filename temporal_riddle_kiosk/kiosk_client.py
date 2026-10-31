@@ -18,15 +18,25 @@ One run of this script = one kid's conversation = one workflow execution:
      result back to the agent.
   4. On Ctrl-C, signal end_session so the workflow finishes promptly
      instead of idling out its timeout.
-  5. A background watcher (watch_for_workflow_end) also runs the other way:
-     once the workflow ends — for ANY reason, not just an operator's
-     Ctrl-C — it ends the ElevenLabs session so this process exits on its
-     own instead of sitting there with no game left behind it. `just kill`
-     (or any other abnormal end) hangs up immediately; a clean finish
-     (correct guess, out_of_guesses, timed_out) gets a short grace period
-     first so the agent can finish speaking the reveal — workflow
-     completion and the deciding guess land in the very same instant, well
-     before the agent has said anything about it.
+  5. The agent itself hangs up when the game ends: the ElevenLabs agent has
+     its built-in `end_call` system tool enabled (one-time platform
+     config, like the TTS model switch — not set by this script), and
+     pirate_riddle_prompt_temporal.txt tells it to call that tool right
+     after it speaks the reveal line for "correct" or "out_of_guesses".
+     ElevenLabs' orchestrator then closes the websocket itself, which the
+     SDK already treats as a normal end_session() (see `_run()`'s
+     `ConnectionClosedOK` handling in conversation.py) — so
+     wait_for_session_end() returns on its own once the agent is actually
+     done talking, no guessing about TTS timing required.
+  6. A background watcher (watch_for_workflow_end) is a fallback for paths
+     the agent has no reason to hang up for itself — "timed_out" (kid
+     walked away, nobody said anything) or "abandoned" (operator's
+     Ctrl-C/end_session signal). It ends the ElevenLabs session once the
+     workflow ends for any reason, so this process never sits there with
+     no game left behind it. An abnormal end (`just kill`, cancel, a real
+     failure) hangs up immediately; a clean finish gets a short grace
+     period first in case the agent is mid-sentence and hasn't called
+     end_call for whatever reason.
 
 Prerequisites (see README.md):
   - `temporal server start-dev` running
@@ -77,9 +87,12 @@ CURRENT_WORKFLOW_FILE = Path(__file__).with_name("current_workflow.txt")
 
 RECORDINGS_DIR = Path(__file__).with_name("recordings")
 
-# How long to let the agent keep talking after a CLEAN workflow finish
-# (correct guess, out_of_guesses, timed_out) before this process hangs up
-# and exits. Confirmed against real workflow history: WorkflowExecutionCompleted
+# Fallback only: on "correct"/"out_of_guesses" the agent now hangs up itself
+# via the end_call tool (see module docstring point 5), so this grace period
+# normally never gets reached — watcher.cancel() in run_kid_session's finally
+# block fires first. It still matters for "timed_out"/"abandoned", where the
+# agent has no reason to call end_call, and as a backstop if it ever forgets
+# to. Confirmed against real workflow history: WorkflowExecutionCompleted
 # lands in the same instant as the deciding guess's Update, before the agent
 # has necessarily said a word about it. Not used for an abnormal end (`just
 # kill`, cancel, a real failure) — that's meant to be immediate.
@@ -161,23 +174,36 @@ class TemporalBridge:
         self._thread.join(timeout=5)
 
 
-async def watch_for_workflow_end(handle: WorkflowHandle, conversation: Conversation) -> None:
+async def watch_for_workflow_end(
+    handle: WorkflowHandle, conversation: Conversation
+) -> None:
     """Ends the ElevenLabs session once the workflow is done, so this
     process exits on its own instead of sitting there waiting for a Ctrl-C
     the operator has no more reason to give.
 
+    This is a fallback, not the primary mechanism: on a correct guess or
+    out_of_guesses, the agent now hangs up itself via its end_call tool
+    right after speaking the reveal (see module docstring point 5), which
+    closes the websocket and makes wait_for_session_end() return on its
+    own — at which point run_kid_session's finally block cancels this
+    watcher before the sleep below ever matters. This coroutine mainly
+    exists for "timed_out" (kid walked away) and "abandoned" (operator's
+    Ctrl-C), where the agent has no reason to call end_call, and as a
+    backstop if it ever forgets to.
+
     `just kill` (or anything else that ends the workflow abnormally —
     terminate, cancel, a genuine failure) hangs up right away. A clean
-    finish (correct guess, out_of_guesses, abandoned, timed_out) resolves
-    handle.result() normally with no exception — those get a grace period
-    first (WORKFLOW_END_GRACE_SECONDS) so the agent can finish speaking,
-    since the workflow completes the instant the deciding guess lands, not
-    after the agent has said anything about it.
+    finish resolves handle.result() normally with no exception — those get
+    a grace period first (WORKFLOW_END_GRACE_SECONDS) in case the agent is
+    still mid-sentence, since the workflow completes the instant the
+    deciding guess lands, not after the agent has said anything about it.
     """
     try:
         await handle.result()
     except Exception as e:
-        print(f"  [temporal] workflow ended abnormally ({e!r}) — ending ElevenLabs session")
+        print(
+            f"  [temporal] workflow ended abnormally ({e!r}) — ending ElevenLabs session"
+        )
     else:
         print(
             f"  [temporal] workflow finished — ending ElevenLabs session in "
@@ -280,8 +306,15 @@ def parse_args() -> argparse.Namespace:
 
 
 def run_kid_session(
-    bridge: TemporalBridge, handle: WorkflowHandle, riddle: RiddleDef, record: bool = False
+    bridge: TemporalBridge,
+    handle: WorkflowHandle,
+    riddle: RiddleDef,
+    record: bool = False,
 ) -> None:
+
+    mic_path = ""
+    agent_path = ""
+
     if record:
         RECORDINGS_DIR.mkdir(exist_ok=True)
         mic_path = RECORDINGS_DIR / f"{handle.id}_mic.wav"
@@ -290,9 +323,9 @@ def run_kid_session(
     else:
         audio_interface = DefaultAudioInterface()
 
-    client = ElevenLabs(api_key=API_KEY)
+    eleven_labs_client = ElevenLabs(api_key=API_KEY)
     conversation = Conversation(
-        client,
+        eleven_labs_client,
         AGENT_ID,
         requires_auth=True,
         audio_interface=audio_interface,
