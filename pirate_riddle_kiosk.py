@@ -116,6 +116,15 @@ RIDDLE_POOL = [
 
 MAX_GUESSES = 3
 
+# Fallback only: the agent is supposed to hang up itself via end_call right
+# after the reveal (see pirate_riddle_prompt.txt), but it doesn't always
+# remember to — unlike a wrong guess, there's no later check_guess call to
+# nudge it back on track once the game is already over, since the kid has
+# no reason to guess again. If end_call hasn't closed the session by
+# itself within this many seconds of the outcome being decided, force it
+# closed. Matches temporal_riddle_kiosk's WORKFLOW_END_GRACE_SECONDS.
+END_CALL_GRACE_SECONDS = 8.0
+
 # One is picked at random per kid (see build_config) so the line doesn't go
 # stale over a night of repeat greetings. Each one asks for the child's name
 # exactly once, matching the prompt's "ask once, never again" rule.
@@ -221,6 +230,32 @@ def _guess_correct(guess: str, answer: str) -> bool:
     return any(g_words[i : i + n] == a_words for i in range(len(g_words) - n + 1))
 
 
+def watch_for_game_end(
+    state: dict, conversation: Conversation, session_ended: threading.Event
+) -> None:
+    """Fallback for when the agent doesn't call end_call itself after the
+    reveal — mirrors temporal_riddle_kiosk's watch_for_workflow_end, just
+    polling local `state` instead of a Temporal workflow handle. Runs in
+    its own daemon thread so it never blocks process exit on its own.
+    """
+    while not session_ended.is_set() and state["outcome"] == "playing":
+        time.sleep(0.5)
+    if session_ended.is_set():
+        return  # ended on its own (end_call, or an operator Ctrl-C) already
+
+    print(
+        f"  [session] outcome={state['outcome']!r} — giving the agent "
+        f"{END_CALL_GRACE_SECONDS:.0f}s to call end_call before forcing it"
+    )
+    session_ended.wait(timeout=END_CALL_GRACE_SECONDS)
+    if not session_ended.is_set():
+        print("  [session] agent never called end_call — ending the session")
+        try:
+            conversation.end_session()
+        except Exception:
+            pass
+
+
 # --- Recording mic input + agent output to a single stereo WAV file -------
 #
 # DefaultAudioInterface already receives every raw PCM chunk going in each
@@ -320,6 +355,7 @@ def run_kid_session(riddle: dict, record: bool = False) -> None:
         audio_interface = DefaultAudioInterface()
 
     tools, state = make_client_tools(riddle["answer"])
+    session_ended = threading.Event()
     client = ElevenLabs(api_key=API_KEY)
     conversation = Conversation(
         client,
@@ -330,14 +366,26 @@ def run_kid_session(riddle: dict, record: bool = False) -> None:
         client_tools=tools,
         callback_agent_response=lambda resp: print(f"☠ Captain: {resp}"),
         callback_user_transcript=lambda text: print(f"🧒 Kid: {text}"),
+        callback_end_session=session_ended.set,
     )
     conversation.start_session()
+    threading.Thread(
+        target=watch_for_game_end,
+        args=(state, conversation, session_ended),
+        daemon=True,
+    ).start()
     try:
         conversation.wait_for_session_end()
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
-        conversation.end_session()  # blocks until audio_interface.stop() finishes (writes the WAV file if recording)
+        # Only call this if nothing already has — end_call (via the SDK's own
+        # ConnectionClosedOK handling) or watch_for_game_end's fallback may
+        # have already torn down the audio interface; calling stop() on an
+        # already-closed pyaudio stream raises. Blocks until
+        # audio_interface.stop() finishes (writes the WAV file if recording).
+        if not session_ended.is_set():
+            conversation.end_session()
         if record:
             print(f"  [recording] {audio_path}")
         print(
