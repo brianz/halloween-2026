@@ -120,10 +120,24 @@ MAX_GUESSES = 3
 # after the reveal (see pirate_riddle_prompt.txt), but it doesn't always
 # remember to — unlike a wrong guess, there's no later check_guess call to
 # nudge it back on track once the game is already over, since the kid has
-# no reason to guess again. If end_call hasn't closed the session by
-# itself within this many seconds of the outcome being decided, force it
-# closed. Matches temporal_riddle_kiosk's WORKFLOW_END_GRACE_SECONDS.
-END_CALL_GRACE_SECONDS = 8.0
+# no reason to guess again. watch_for_game_end() uses TimingAudioInterface
+# to detect when the Captain's queued speech has actually finished playing
+# (not a guessed delay — a cutoff would risk dropping the end of a longer
+# reveal line) before forcing the session closed. These constants only
+# matter for that fallback path:
+#   - SPEECH_START_TIMEOUT_SECONDS: how long to wait for the reveal's audio
+#     to actually start arriving before giving up on it ever coming — the
+#     LLM + TTS take a beat after the tool call returns, so "no audio yet"
+#     right after the guess means "hasn't started", not "already done".
+#   - QUIET_SETTLE_SECONDS: once speech HAS started, how long the audio
+#     queue must then stay empty before we trust he's actually finished —
+#     TTS chunks can have brief gaps mid-sentence, not just between turns.
+#   - MAX_WAIT_FOR_END_CALL_SECONDS: an absolute ceiling in case something
+#     is badly wrong (e.g. audio stuck "playing" forever) — the process
+#     should never hang indefinitely regardless.
+SPEECH_START_TIMEOUT_SECONDS = 5.0
+QUIET_SETTLE_SECONDS = 0.6
+MAX_WAIT_FOR_END_CALL_SECONDS = 30.0
 
 # One is picked at random per kid (see build_config) so the line doesn't go
 # stale over a night of repeat greetings. Each one asks for the child's name
@@ -231,37 +245,110 @@ def _guess_correct(guess: str, answer: str) -> bool:
 
 
 def watch_for_game_end(
-    state: dict, conversation: Conversation, session_ended: threading.Event
+    state: dict,
+    conversation: Conversation,
+    session_ended: threading.Event,
+    audio_interface: "TimingAudioInterface",
 ) -> None:
     """Fallback for when the agent doesn't call end_call itself after the
     reveal — mirrors temporal_riddle_kiosk's watch_for_workflow_end, just
     polling local `state` instead of a Temporal workflow handle. Runs in
     its own daemon thread so it never blocks process exit on its own.
+
+    Once the outcome is decided, waits for `audio_interface` to report the
+    Captain's queued speech has actually finished playing (plus a short
+    settle period, since TTS chunks can have brief gaps mid-sentence) —
+    not a guessed fixed delay, which would either cut off a longer reveal
+    line or leave needless dead air after a short one.
+
+    Two phases, because `still_speaking()` is also False in the few hundred
+    ms to a couple seconds between the tool call returning and the first
+    reveal audio chunk actually arriving (LLM + TTS latency) — checking it
+    immediately would end the call before the reveal even starts, which is
+    worse than a late cutoff. So first wait for *new* audio (a chunk after
+    the outcome was decided) to show up at all, bounded by
+    SPEECH_START_TIMEOUT_SECONDS; only once speech has actually started do
+    we treat "queue empty" as "finished" rather than "hasn't begun yet".
     """
     while not session_ended.is_set() and state["outcome"] == "playing":
-        time.sleep(0.5)
+        time.sleep(0.3)
     if session_ended.is_set():
         return  # ended on its own (end_call, or an operator Ctrl-C) already
 
-    print(
-        f"  [session] outcome={state['outcome']!r} — giving the agent "
-        f"{END_CALL_GRACE_SECONDS:.0f}s to call end_call before forcing it"
-    )
-    session_ended.wait(timeout=END_CALL_GRACE_SECONDS)
+    outcome_decided_at = time.monotonic()
+    print(f"  [session] outcome={state['outcome']!r} — waiting for the Captain to finish speaking")
+
+    start_deadline = outcome_decided_at + SPEECH_START_TIMEOUT_SECONDS
+    while not session_ended.is_set() and time.monotonic() < start_deadline:
+        if audio_interface.spoke_since(outcome_decided_at):
+            break
+        time.sleep(0.2)
+    if session_ended.is_set():
+        return
+
+    deadline = outcome_decided_at + MAX_WAIT_FOR_END_CALL_SECONDS
+    while not session_ended.is_set() and time.monotonic() < deadline:
+        if audio_interface.still_speaking():
+            time.sleep(0.2)
+            continue
+        if session_ended.wait(timeout=QUIET_SETTLE_SECONDS):
+            return  # ended on its own during the settle window
+        if not audio_interface.still_speaking():
+            break  # confirmed quiet — safe to end now
+
     if not session_ended.is_set():
-        print("  [session] agent never called end_call — ending the session")
+        print("  [session] ending the session now")
         try:
             conversation.end_session()
         except Exception:
             pass
 
 
+# --- Knowing when the Captain has actually finished talking ---------------
+#
+# DefaultAudioInterface.output() hands us each raw 16-bit PCM chunk right
+# before queueing it for playback. A chunk's byte length maps directly to a
+# playback duration at a known sample rate, so we can track exactly when
+# all currently-queued audio will finish playing — busy_until — without
+# guessing. watch_for_game_end() uses this to know it's actually safe to
+# hang up, instead of a fixed delay that could cut off a long reveal line
+# or leave dead air after a short one.
+
+
+class TimingAudioInterface(DefaultAudioInterface):
+    SAMPLE_RATE = 16000
+    SAMPLE_WIDTH = 2  # 16-bit PCM, matches DefaultAudioInterface's formats
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._timing_lock = threading.Lock()
+        self._busy_until = time.monotonic()
+        self._last_chunk_at: float | None = None
+
+    def output(self, audio: bytes) -> None:
+        duration = len(audio) / (self.SAMPLE_RATE * self.SAMPLE_WIDTH)
+        with self._timing_lock:
+            now = time.monotonic()
+            self._busy_until = max(self._busy_until, now) + duration
+            self._last_chunk_at = now
+        super().output(audio)
+
+    def still_speaking(self) -> bool:
+        with self._timing_lock:
+            return time.monotonic() < self._busy_until
+
+    def spoke_since(self, reference: float) -> bool:
+        """True once a chunk has arrived at or after `reference` — used to
+        tell "hasn't started speaking yet" apart from "already finished",
+        both of which otherwise look identical to still_speaking()."""
+        with self._timing_lock:
+            return self._last_chunk_at is not None and self._last_chunk_at >= reference
+
+
 # --- Recording mic input + agent output to a single stereo WAV file -------
 #
-# DefaultAudioInterface already receives every raw PCM chunk going in each
-# direction (16-bit mono, 16kHz — see its INPUT/OUTPUT constants). Mic input
-# arrives continuously on one thread; agent TTS output arrives in bursts on
-# another thread, only while the agent is actually speaking — there's no
+# Mic input arrives continuously on one thread; agent TTS output arrives in
+# bursts on another, only while the agent is actually speaking — there's no
 # shared clock between them, so naively appending both streams into one file
 # as chunks arrive would interleave them in whatever order they happened to
 # land, scrambling both. Instead each chunk is timestamped against session
@@ -270,10 +357,7 @@ def watch_for_game_end(
 # sync with when each side actually spoke.
 
 
-class RecordingAudioInterface(DefaultAudioInterface):
-    SAMPLE_RATE = 16000
-    SAMPLE_WIDTH = 2  # 16-bit PCM, matches DefaultAudioInterface's formats
-
+class RecordingAudioInterface(TimingAudioInterface):
     def __init__(self, output_path: Path) -> None:
         super().__init__()
         self._output_path = output_path
@@ -290,7 +374,7 @@ class RecordingAudioInterface(DefaultAudioInterface):
     def output(self, audio: bytes) -> None:
         with self._lock:
             self._agent_chunks.append((time.monotonic() - self._start_time, audio))
-        super().output(audio)
+        super().output(audio)  # chains to TimingAudioInterface.output() for busy_until
 
     def stop(self) -> None:
         super().stop()
@@ -352,7 +436,9 @@ def run_kid_session(riddle: dict, record: bool = False) -> None:
         audio_path = RECORDINGS_DIR / f"{session_id}.wav"
         audio_interface = RecordingAudioInterface(audio_path)
     else:
-        audio_interface = DefaultAudioInterface()
+        # Still a TimingAudioInterface, not a plain DefaultAudioInterface —
+        # watch_for_game_end needs still_speaking() regardless of --record.
+        audio_interface = TimingAudioInterface()
 
     tools, state = make_client_tools(riddle["answer"])
     session_ended = threading.Event()
@@ -371,7 +457,7 @@ def run_kid_session(riddle: dict, record: bool = False) -> None:
     conversation.start_session()
     threading.Thread(
         target=watch_for_game_end,
-        args=(state, conversation, session_ended),
+        args=(state, conversation, session_ended, audio_interface),
         daemon=True,
     ).start()
     try:
