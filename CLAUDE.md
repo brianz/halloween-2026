@@ -75,23 +75,26 @@ lives*, not how you run or control a session:
   terminal; the Temporal kiosk drops its workflow id in
   `temporal_riddle_kiosk/current_workflow.txt` so `just kill` (run from
   that directory) can terminate the workflow directly.
-- **Known divergence:** `temporal_riddle_kiosk/kiosk_client.py` exits on
-  its own once the workflow ends, for any reason. On a correct guess or
-  out_of_guesses, the agent hangs up *itself*: `pirate_riddle_prompt_temporal.txt`
-  tells it to call the ElevenLabs built-in `end_call` tool right after
-  speaking the reveal, which closes the websocket and the SDK already
-  treats that as a normal `end_session()` — no guessing about TTS timing.
-  A background watcher (`watch_for_workflow_end`) is the fallback for paths
-  the agent has no reason to call `end_call` for — "timed_out" (kid walked
-  away) or "abandoned" (operator's Ctrl-C) — plus a backstop in case it
-  ever forgets to: it waits on `handle.result()` and ends the ElevenLabs
-  session when it resolves, immediately on an abnormal end (`just kill`),
-  after a short grace period (`WORKFLOW_END_GRACE_SECONDS`) on a clean
-  finish in case the agent is still mid-sentence. `pirate_riddle_kiosk.py`
-  has no separate orchestration layer to watch this way, so it still always
-  needs an explicit Ctrl-C per session — and its prompt (along with
-  `pirate_prompt.txt`) explicitly tells the agent never to call `end_call`,
-  since enabling the tool is agent-wide (see gotcha below), not per-script.
+- **Both riddle scripts now exit on their own once the game ends** (correct
+  guess or out_of_guesses) — the agent hangs up *itself* via the ElevenLabs
+  built-in `end_call` tool, called right after the reveal/send-off line
+  (`pirate_riddle_prompt_temporal.txt` and, since 2026-10-30,
+  `pirate_riddle_prompt.txt` too). The orchestrator closes the websocket,
+  the SDK already treats that as a normal `end_session()` — no guessing
+  about TTS timing — and `wait_for_session_end()` returns on its own.
+  `temporal_riddle_kiosk/kiosk_client.py` additionally has a background
+  watcher (`watch_for_workflow_end`) as a fallback for paths the agent has
+  no reason to call `end_call` for ("timed_out"/kid walked away,
+  "abandoned"/operator's Ctrl-C) or in case it ever forgets to; it waits
+  on `handle.result()` and ends the session, immediately on an abnormal
+  end (`just kill`), after a short grace period
+  (`WORKFLOW_END_GRACE_SECONDS`) on a clean finish.
+  `pirate_riddle_kiosk.py` has no separate orchestration layer to watch
+  this way, so it has no equivalent fallback — if the agent ever doesn't
+  call `end_call`, Ctrl-C is still the only way out, same as always.
+  `pirate_prompt.txt` (password mode) still explicitly tells the agent
+  never to call `end_call` — enabling the tool is agent-wide (see gotcha
+  below), not per-script, and that script wasn't part of this change.
 - **The 3-guess cap, "ask the child's name once" rule, and 5-greeting
   `FIRST_MESSAGES` are ported to both riddle kiosks, not just Temporal.**
   `pirate_riddle_kiosk.py` mirrors `temporal_riddle_kiosk/kiosk_client.py`'s
@@ -145,6 +148,21 @@ Raw: `.venv/bin/python pirate_kiosk.py` / `.venv/bin/python pirate_riddle_kiosk.
 
 ## Gotchas learned the hard way
 
+- **2026-10-30: `pirate_riddle_kiosk.py` had the same "session never ends"
+  bug the Temporal kiosk had before its `end_call` fix** — a correct guess
+  didn't end anything; the agent just kept re-prompting the child in the
+  same still-open conversation. Fixed the same way, not with a new
+  mechanism: flipped `pirate_riddle_prompt.txt` from "never call end_call"
+  to "call it right after the reveal" (the tool was already enabled
+  agent-wide from the Temporal fix). `run_kid_session()` needed no new
+  exit logic — `conversation.wait_for_session_end()` already returns on
+  its own once the websocket closes, so the script just naturally reaches
+  the end of `__main__` and exits, no explicit `sys.exit()` needed.
+  Confirmed by calling `run_kid_session()` directly in a scripted
+  text-only session and timing how long it took to return with no Ctrl-C
+  sent. Unlike the Temporal kiosk, there's no background watcher here as
+  a fallback if the agent ever skips calling `end_call` — Ctrl-C remains
+  the only way out in that case, same as before this fix.
 - **2026-10-30: `worker.py` doesn't hot-reload** — it imports `models.py`/
   `workflows.py`/`activities.py` once at startup, so an edit to any of them
   (e.g. changing `MAX_GUESSES`) has no effect on games started against an
