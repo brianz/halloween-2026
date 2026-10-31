@@ -71,7 +71,22 @@ CURRENT_SESSION_FILE = Path(__file__).with_name("current_riddle_kiosk.pid")
 
 RECORDINGS_DIR = Path(__file__).with_name("recordings")
 
+# "difficulty" is a 1 (easiest) to 10 (hardest) guess at how hard each
+# riddle is for a trick-or-treater to solve, used to pick a riddle when the
+# kiosk-ui passes --difficulty. One riddle per level by design, so the UI's
+# 1-10 dial maps onto an exact riddle rather than a fuzzy nearest-match —
+# these ratings are a first guess (see CLAUDE.md), expect them to get
+# reshuffled once there's real kid-reaction data from the night.
 RIDDLE_POOL = [
+    {
+        "riddle": (
+            "I'm made of old wood with a big lock on my lid. Fill me "
+            "with gold and jewels and I'll make any pirate smile. "
+            "What am I?"
+        ),
+        "answer": "Treasure Chest",
+        "difficulty": 1,
+    },
     {
         "riddle": (
             "I sit upon a pirate's shoulder and squawk words I don't "
@@ -79,22 +94,15 @@ RIDDLE_POOL = [
             "What bird am I?"
         ),
         "answer": "Parrot",
+        "difficulty": 2,
     },
     {
         "riddle": (
-            "I'm heavy as a cannonball and I sleep at the bottom of the "
-            "sea. I keep your ship from sailing away in the night. "
-            "What am I?"
+            "I'm big and round and made of iron. I go BOOM and send "
+            "cannonballs flying across the sea. What am I?"
         ),
-        "answer": "Anchor",
-    },
-    {
-        "riddle": (
-            "I always point the way home. I have no legs, yet I never "
-            "get lost, and sailors trust me more than the stars. "
-            "What am I?"
-        ),
-        "answer": "Compass",
+        "answer": "Cannon",
+        "difficulty": 3,
     },
     {
         "riddle": (
@@ -103,6 +111,33 @@ RIDDLE_POOL = [
             "myself. What am I?"
         ),
         "answer": "Map",
+        "difficulty": 4,
+    },
+    {
+        "riddle": (
+            "I'm heavy as a cannonball and I sleep at the bottom of the "
+            "sea. I keep your ship from sailing away in the night. "
+            "What am I?"
+        ),
+        "answer": "Anchor",
+        "difficulty": 5,
+    },
+    {
+        "riddle": (
+            "I'm curved like the moon and shiny like silver. Some "
+            "pirates wear me instead of a hand. What am I?"
+        ),
+        "answer": "Hook",
+        "difficulty": 6,
+    },
+    {
+        "riddle": (
+            "I always point the way home. I have no legs, yet I never "
+            "get lost, and sailors trust me more than the stars. "
+            "What am I?"
+        ),
+        "answer": "Compass",
+        "difficulty": 7,
     },
     {
         "riddle": (
@@ -111,6 +146,26 @@ RIDDLE_POOL = [
             "member. What am I?"
         ),
         "answer": "Skeleton",
+        "difficulty": 8,
+    },
+    {
+        "riddle": (
+            "I'm a flag that flies high above a pirate ship. I'm black "
+            "as night with a skull and crossbones for my face, and I "
+            "scare sailors before they even see the ship below me. "
+            "What am I?"
+        ),
+        "answer": "Jolly Roger",
+        "difficulty": 9,
+    },
+    {
+        "riddle": (
+            "I'm long and thin, and when you peek through one end of "
+            "me, far-away ships look close enough to touch. "
+            "What am I?"
+        ),
+        "answer": "Spyglass",
+        "difficulty": 10,
     },
 ]
 
@@ -168,8 +223,16 @@ FIRST_MESSAGES = [
 ]
 
 
-def pick_riddle() -> dict:
-    return random.choice(RIDDLE_POOL)
+def pick_riddle(difficulty: int | None = None) -> dict:
+    """With no difficulty, pick uniformly at random (the original
+    behavior). With one, pick the riddle tagged with that exact level —
+    RIDDLE_POOL has one per 1-10 level by construction."""
+    if difficulty is None:
+        return random.choice(RIDDLE_POOL)
+    for riddle in RIDDLE_POOL:
+        if riddle["difficulty"] == difficulty:
+            return riddle
+    sys.exit(f"No riddle tagged difficulty={difficulty!r} in RIDDLE_POOL.")
 
 
 def build_config(riddle: dict) -> ConversationInitiationData:
@@ -458,6 +521,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Record this session to a stereo WAV file in recordings/ (off by default)",
     )
+    parser.add_argument(
+        "--difficulty",
+        type=int,
+        choices=range(1, 11),
+        default=None,
+        metavar="1-10",
+        help="Pick the riddle tagged with this difficulty instead of a random one "
+        "(driven by kiosk-ui; omit for the original random-pick behavior)",
+    )
     return parser.parse_args()
 
 
@@ -521,8 +593,8 @@ def run_kid_session(riddle: dict, record: bool = False) -> None:
 
 if __name__ == "__main__":
     args = parse_args()
-    riddle = pick_riddle()
-    print(f"🗡  This kid's riddle: {riddle['riddle']}")
+    riddle = pick_riddle(args.difficulty)
+    print(f"🗡  This kid's riddle (difficulty {riddle['difficulty']}/10): {riddle['riddle']}")
     print(f"    Answer (ssh, don't tell): {riddle['answer']}")
     if args.record:
         print("    Recording this session to recordings/.")

@@ -161,6 +161,14 @@ Raw: `.venv/bin/python pirate_kiosk.py` / `.venv/bin/python pirate_riddle_kiosk.
 
 ## Gotchas learned the hard way
 
+- **2026-10-31: `kiosk-ui`'s live log was empty until the session ended,
+  then dumped all at once** — Python fully block-buffers stdout whenever
+  it isn't attached to a TTY, which is always true once spawned via
+  Node's `child_process.spawn()` with piped stdio. Fixed by passing `-u`
+  (unbuffered) to the interpreter in `kiosk-ui/src/lib/server/kiosk.ts`'s
+  spawn call. Only affects driving the script through a pipe — running it
+  directly in a terminal was never affected, since a real TTY gets
+  line-buffered output by default.
 - **2026-10-30: `conversation.end_session()` can hang the ENTIRE process,
   Ctrl-C included** — confirmed live during `pirate_riddle_kiosk.py`
   testing: after a correct guess, the Captain's reveal line printed, the
@@ -351,4 +359,12 @@ Raw: `.venv/bin/python pirate_kiosk.py` / `.venv/bin/python pirate_riddle_kiosk.
   recipes invoking `../.venv/bin/python`. See its `README.md` for the full
   runbook, including `just kill` to force-terminate a stuck kid's game from
   a second terminal.
+- **`kiosk-ui/`** — a browser control panel for `pirate_riddle_kiosk.py`
+  (SvelteKit + Svelte 5 + Tailwind), added 2026-10-31: pick a riddle
+  difficulty 1-10, Start, End Gracefully (`SIGINT` — the same thing Ctrl-C
+  does), Force Quit (`SIGKILL`). Entirely separate tech stack (Node, not
+  Python) that drives the existing script as a subprocess rather than
+  reimplementing any game logic — `src/lib/server/kiosk.ts` is the whole
+  integration surface. `npm install && npm run dev -- --open` inside the
+  directory, or `just ui` from the repo root. See its own `README.md`.
 </content>

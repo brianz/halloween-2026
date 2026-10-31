@@ -32,6 +32,14 @@ riddle-kiosk *args:
 kill-riddle-kiosk:
     kill -INT "$(cat current_riddle_kiosk.pid)"
 
+# ---- UI ---------------------------------------------------------------------
+
+# Browser control panel for riddle-kiosk: start (with a 1-10 difficulty
+# dial), end gracefully, or force-quit a session without touching a
+# terminal. First run needs `cd kiosk-ui && npm install`. See its README.
+ui:
+    cd kiosk-ui && npm run dev -- --open
+
 # ---- diagnostics -------------------------------------------------------------
 
 # Record a few seconds from the default mic and report its peak level — no
