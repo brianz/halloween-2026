@@ -89,7 +89,7 @@
 	const forceQuit = () => post('/api/kill');
 </script>
 
-<main class="mx-auto flex min-h-screen max-w-3xl flex-col gap-6 bg-slate-950 p-6 text-slate-100">
+<main class="mx-auto flex h-screen max-w-3xl flex-col gap-6 overflow-hidden bg-slate-950 p-6 text-slate-100">
 	<header>
 		<h1 class="text-3xl font-bold text-orange-400">🏴‍☠️ Captain Barnaby Bones</h1>
 		<p class="mt-1 text-sm text-slate-400">
@@ -171,7 +171,7 @@
 		</p>
 		<pre
 			bind:this={logEl}
-			class="min-h-48 flex-1 overflow-y-auto p-4 text-xs leading-relaxed whitespace-pre-wrap text-slate-300"
+			class="min-h-0 flex-1 overflow-y-auto p-4 text-xs leading-relaxed whitespace-pre-wrap text-slate-300"
 		>{log.length ? log.join('\n') : '(nothing yet)'}</pre>
 	</section>
 </main>
