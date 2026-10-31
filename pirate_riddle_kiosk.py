@@ -139,6 +139,16 @@ SPEECH_START_TIMEOUT_SECONDS = 5.0
 QUIET_SETTLE_SECONDS = 0.6
 MAX_WAIT_FOR_END_CALL_SECONDS = 30.0
 
+# Confirmed live: conversation.end_session() can hang the ENTIRE process,
+# Ctrl-C included. Its own code calls audio_interface.stop() — which joins
+# DefaultAudioInterface's output thread, which can be stuck inside a
+# blocking pyaudio stream.write() — before it sets `_should_stop`, so if
+# that join() never returns, the websocket thread never learns to exit
+# either, and wait_for_session_end() (and a Ctrl-C handler's own call to
+# end_session(), which hits the exact same stuck join()) both hang with
+# it. See end_session_or_die().
+END_SESSION_TIMEOUT_SECONDS = 5.0
+
 # One is picked at random per kid (see build_config) so the line doesn't go
 # stale over a night of repeat greetings. Each one asks for the child's name
 # exactly once, matching the prompt's "ask once, never again" rule.
@@ -298,10 +308,37 @@ def watch_for_game_end(
 
     if not session_ended.is_set():
         print("  [session] ending the session now")
+        end_session_or_die(conversation)
+
+
+def end_session_or_die(conversation: Conversation) -> None:
+    """conversation.end_session() can block the ENTIRE process, Ctrl-C
+    included — confirmed live, not theoretical (see
+    END_SESSION_TIMEOUT_SECONDS above). Rather than chase whatever made
+    pyaudio's output thread get stuck, give normal cleanup a bounded
+    window and hard-exit the whole process if it blows past it. The
+    kiosk's real requirement is "always ready for the next kid, rerun the
+    script" — not "every session's audio interface tears down cleanly".
+    A --record session caught by this loses that session's WAV file
+    (RecordingAudioInterface writes it inside the very call being
+    abandoned) — an acceptable trade for never hanging.
+    """
+    done = threading.Event()
+
+    def _do_end() -> None:
         try:
             conversation.end_session()
-        except Exception:
-            pass
+        finally:
+            done.set()
+
+    threading.Thread(target=_do_end, daemon=True).start()
+    if not done.wait(timeout=END_SESSION_TIMEOUT_SECONDS):
+        print(
+            f"  [session] end_session() didn't return within "
+            f"{END_SESSION_TIMEOUT_SECONDS:.0f}s — force-exiting",
+            flush=True,
+        )
+        os._exit(1)
 
 
 # --- Knowing when the Captain has actually finished talking ---------------
@@ -468,10 +505,12 @@ def run_kid_session(riddle: dict, record: bool = False) -> None:
         # Only call this if nothing already has — end_call (via the SDK's own
         # ConnectionClosedOK handling) or watch_for_game_end's fallback may
         # have already torn down the audio interface; calling stop() on an
-        # already-closed pyaudio stream raises. Blocks until
-        # audio_interface.stop() finishes (writes the WAV file if recording).
+        # already-closed pyaudio stream raises. end_session_or_die() blocks
+        # until audio_interface.stop() finishes (writes the WAV file if
+        # recording) — or force-exits the process if that hangs, which is
+        # exactly what happened on a real test, Ctrl-C included.
         if not session_ended.is_set():
-            conversation.end_session()
+            end_session_or_die(conversation)
         if record:
             print(f"  [recording] {audio_path}")
         print(
