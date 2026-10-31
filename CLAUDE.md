@@ -161,6 +161,30 @@ Raw: `.venv/bin/python pirate_kiosk.py` / `.venv/bin/python pirate_riddle_kiosk.
 
 ## Gotchas learned the hard way
 
+- **2026-10-30: `conversation.end_session()` can hang the ENTIRE process,
+  Ctrl-C included** — confirmed live during `pirate_riddle_kiosk.py`
+  testing: after a correct guess, the Captain's reveal line printed, the
+  watcher logged "ending the session now", and then nothing — not even
+  repeated Ctrl-C did anything. Root cause is in the ElevenLabs SDK's own
+  `end_session()`: it calls `audio_interface.stop()` (which joins
+  `DefaultAudioInterface`'s output thread — stuck, that time, inside a
+  blocking pyaudio `stream.write()`) *before* it sets `_should_stop`. So
+  when that `join()` never returns, the websocket thread never learns to
+  exit either, `wait_for_session_end()` never unblocks, and a Ctrl-C
+  handler's own call to `end_session()` hits the exact same stuck
+  `join()` — there's no working escape hatch inside the SDK's own
+  shutdown path once this happens. Didn't chase the underlying pyaudio
+  state (no hardware access to reproduce it outside the operator's real
+  session); added `end_session_or_die()` instead — runs `end_session()`
+  in a background thread and `os._exit()`s the whole process if it
+  doesn't return within `END_SESSION_TIMEOUT_SECONDS` (5s). Wired into
+  every place that force-ends a session (`watch_for_game_end`'s fallback,
+  `run_kid_session`'s Ctrl-C path) so the process always dies on its own
+  within 5s instead of sitting there unresponsive — "always ready for
+  the next kid" matters more than "every session's audio interface tears
+  down cleanly". Trade-off: a `--record` session caught by this loses
+  that session's WAV file, since `RecordingAudioInterface` writes it
+  inside the very `stop()` call being abandoned.
 - **2026-10-30: `pirate_riddle_kiosk.py` had the same "session never ends"
   bug the Temporal kiosk had before its `end_call` fix** — a correct guess
   didn't end anything; the agent just kept re-prompting the child in the
