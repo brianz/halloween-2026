@@ -106,12 +106,25 @@ RIDDLE_POOL = [
     },
 ]
 
-# The line the agent says before the child's first guess; kept here so the
-# dashboard copy doesn't matter — the kiosk is the source of truth.
-FIRST_MESSAGE = (
+MAX_GUESSES = 3
+
+# One is picked at random per kid (see build_config) so the line doesn't go
+# stale over a night of repeat greetings. Each one asks for the child's name
+# exactly once, matching the prompt's "ask once, never again" rule.
+FIRST_MESSAGES = [
     "[chuckles] Well, well... another landlubber washes up on me shore. "
-    "I be Captain Barnaby Bones! What be yer name, little matey?"
-)
+    "I be Captain Barnaby Bones! What be yer name, little matey?",
+    "[laughs] Shiver me timbers, a new face! I be Captain Barnaby Bones, "
+    "ghost of the seven seas. Tell me yer name, young buccaneer!",
+    "[whistles] Ahoy there! Captain Barnaby Bones at yer service, haunting "
+    "this here chest for one more Halloween. Who do I have the pleasure "
+    "of spookin' tonight?",
+    "[mischievously] Well if it isn't another brave soul... I be Captain "
+    "Barnaby Bones, and this be me ship for the evening! What should I "
+    "call ye, matey?",
+    "[excited] Arrr, a visitor! I be Captain Barnaby Bones, scourge of "
+    "the candy seas! What be yer name, friend?",
+]
 
 
 def pick_riddle() -> dict:
@@ -128,7 +141,7 @@ def build_config(riddle: dict) -> ConversationInitiationData:
         conversation_config_override={
             "agent": {
                 "prompt": {"prompt": prompt},
-                "first_message": FIRST_MESSAGE,
+                "first_message": random.choice(FIRST_MESSAGES),
             },
             # Boost every riddle's answer words (not just this session's) so
             # a mumbled guess still transcribes reliably without tipping off
@@ -142,6 +155,12 @@ def make_client_tools(answer: str):
     from elevenlabs.conversational_ai.conversation import ClientTools
 
     tools = ClientTools()
+    # Local closure state — the whole-game equivalent of the Temporal
+    # workflow's outcome/guesses fields, just living in this process instead
+    # of durable workflow history. Once outcome != "playing", any further
+    # call is rejected the same way a 4th Update would be: told the game's
+    # over rather than silently given another hint.
+    state = {"outcome": "playing", "guesses": []}
 
     def check_guess(parameters: dict) -> str:
         """Deterministic guess check — the agent calls this every turn.
@@ -149,11 +168,30 @@ def make_client_tools(answer: str):
         rejects non-string client tool results with a 1008 policy
         violation, which kills the whole session."""
         guess = parameters.get("guess", "")
+
+        if state["outcome"] != "playing":
+            print(f"  [check_guess] {guess!r} -> rejected, already {state['outcome']}")
+            return "the game's already over — reveal the answer and move on."
+
+        state["guesses"].append(guess)
         correct = _guess_correct(guess, answer)
-        print(f"  [check_guess] {guess!r} -> {'CORRECT' if correct else 'nope'}")
         if correct:
+            state["outcome"] = "correct"
+        elif len(state["guesses"]) >= MAX_GUESSES:
+            state["outcome"] = "out_of_guesses"
+
+        print(
+            f"  [check_guess] {guess!r} -> {state['outcome']} "
+            f"({len(state['guesses'])}/{MAX_GUESSES} guesses used)"
+        )
+
+        if state["outcome"] == "correct":
             return f"correct — the answer is {answer}. Reveal it now and celebrate!"
-        return "incorrect — keep playing, give the clue for this turn."
+        if state["outcome"] == "out_of_guesses":
+            return "out_of_guesses — gently reveal the answer and send them to the chest."
+        remaining = MAX_GUESSES - len(state["guesses"])
+        noun = "guess" if remaining == 1 else "guesses"
+        return f"incorrect — {remaining} {noun} left, give the clue for this turn."
 
     tools.register("check_guess", check_guess)
     return tools

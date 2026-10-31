@@ -14,20 +14,19 @@ than something you'd have to hand-roll.
 
 ## Why try this
 
-Three things Temporal gives you for free that the plain-Python version has
+Two things Temporal gives you for free that the plain-Python version has
 to hand-roll or simply doesn't have:
 
-- **Each guess is a small, independently durable step.** A Workflow Update
-  is recorded in the workflow's history the moment it's accepted — if the
-  worker process dies mid-game, the next worker to pick it up resumes with
-  every guess so far intact. The current kiosk's state lives only in a
-  Python variable in a process that Ctrl-C kills outright.
-- **The guess cap (MAX_GUESSES) is real, enforced state — not
-  turn-counting.** The original prompt tracks "turn 2, turn 3, ... turn 6"
-  and trusts the LLM to count correctly and to only call `check_guess` on
-  actual guesses. Here, `submit_guess`'s **Update validator** flatly
-  rejects any guess past the cap; it can't be talked around by chatter
-  that doesn't look like a guess.
+- **Each guess is a small, independently durable step.** Both kiosks
+  enforce the guess cap (`MAX_GUESSES`) and reject check_guess calls past
+  it as real state rather than trusting the LLM's turn count —
+  `../pirate_riddle_kiosk.py`'s `check_guess` closure does this with a
+  plain Python dict. The difference is durability: here each guess is a
+  Workflow Update recorded in the workflow's history the moment it's
+  accepted, so if the worker process dies mid-game, the next worker to
+  pick it up resumes with every guess so far intact. The plain kiosk's
+  equivalent state is just a variable in a process that Ctrl-C kills
+  outright.
 - **Live visibility into a running game.** `temporal workflow show
   --workflow-id riddle-game-...` or the local Web UI
   (http://localhost:8233) lets you watch a kid's game — riddle, guesses,

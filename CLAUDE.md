@@ -92,14 +92,20 @@ lives*, not how you run or control a session:
   needs an explicit Ctrl-C per session — and its prompt (along with
   `pirate_prompt.txt`) explicitly tells the agent never to call `end_call`,
   since enabling the tool is agent-wide (see gotcha below), not per-script.
-- **Temporal-only, for now:** the 3-guess cap (`MAX_GUESSES` in
-  `temporal_riddle_kiosk/models.py`), the "ask the child's name exactly
-  once" rule, and `FIRST_MESSAGES` (5 greeting variants, picked at random
-  per session in `kiosk_client.py`'s `build_config`) only exist in the
-  Temporal kiosk's code/prompt. `pirate_kiosk.py` and
-  `pirate_riddle_kiosk.py` still end on turn count alone and each have a
-  single hardcoded `FIRST_MESSAGE` — unchanged, since Temporal is the
-  version actually run on the night (see "Other subprojects").
+- **The 3-guess cap, "ask the child's name once" rule, and 5-greeting
+  `FIRST_MESSAGES` are ported to both riddle kiosks, not just Temporal.**
+  `pirate_riddle_kiosk.py` mirrors `temporal_riddle_kiosk/kiosk_client.py`'s
+  `MAX_GUESSES`/`FIRST_MESSAGES` and `pirate_riddle_prompt.txt` mirrors
+  `pirate_riddle_prompt_temporal.txt`'s rules (name-once, turn-2-doesn't-
+  call-check_guess, guess-cap-overrides-the-clue-ladder) — same known
+  minor lag on the exact turn the cap is hit (see gotcha above), same
+  fix, same self-correction via check_guess's rejection message. The
+  difference is purely *where the cap's state lives*: a local Python
+  closure (`state` dict in `make_client_tools`) instead of Temporal
+  workflow fields — non-durable, but that was already true of everything
+  else in the plain kiosk. `pirate_kiosk.py` (password mode, a different
+  game) is untouched — it still ends on turn count alone with a single
+  hardcoded `FIRST_MESSAGE`.
 
 ## Files
 

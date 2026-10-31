@@ -303,7 +303,8 @@ def make_client_tools(bridge: TemporalBridge, handle: WorkflowHandle):
             return (
                 "out_of_guesses — gently reveal the answer and send them to the chest."
             )
-        return f"incorrect — {result.guesses_remaining} guesses left, give the clue for this turn."
+        noun = "guess" if result.guesses_remaining == 1 else "guesses"
+        return f"incorrect — {result.guesses_remaining} {noun} left, give the clue for this turn."
 
     tools.register("check_guess", check_guess)
     return tools
