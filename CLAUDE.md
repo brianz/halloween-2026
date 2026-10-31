@@ -92,6 +92,14 @@ lives*, not how you run or control a session:
   needs an explicit Ctrl-C per session — and its prompt (along with
   `pirate_prompt.txt`) explicitly tells the agent never to call `end_call`,
   since enabling the tool is agent-wide (see gotcha below), not per-script.
+- **Temporal-only, for now:** the 3-guess cap (`MAX_GUESSES` in
+  `temporal_riddle_kiosk/models.py`), the "ask the child's name exactly
+  once" rule, and `FIRST_MESSAGES` (5 greeting variants, picked at random
+  per session in `kiosk_client.py`'s `build_config`) only exist in the
+  Temporal kiosk's code/prompt. `pirate_kiosk.py` and
+  `pirate_riddle_kiosk.py` still end on turn count alone and each have a
+  single hardcoded `FIRST_MESSAGE` — unchanged, since Temporal is the
+  version actually run on the night (see "Other subprojects").
 
 ## Files
 
@@ -131,6 +139,40 @@ Raw: `.venv/bin/python pirate_kiosk.py` / `.venv/bin/python pirate_riddle_kiosk.
 
 ## Gotchas learned the hard way
 
+- **2026-10-30: `worker.py` doesn't hot-reload** — it imports `models.py`/
+  `workflows.py`/`activities.py` once at startup, so an edit to any of them
+  (e.g. changing `MAX_GUESSES`) has no effect on games started against an
+  already-running worker. Caught this mid-testing: lowered `MAX_GUESSES`
+  from 5 to 3, reran a scripted session against a worker that had been up
+  since before the edit, and the cap was silently still 5. Kill and
+  restart `worker.py` after any change to those files before testing or
+  running the kiosk for real.
+- **2026-10-30: lowering `MAX_GUESSES` surfaced two latent prompt bugs in
+  `pirate_riddle_prompt_temporal.txt`** that a cap of 5 had been masking:
+  (1) the prompt's old "every turn from turn 2 onward, call check_guess"
+  rule meant turn 2 — posing the riddle for the first time, before the
+  child has said anything to guess — burned a guess slot on a non-guess;
+  with a 3-guess cap that left only 2 real attempts. Fixed by moving the
+  mandate to "turn 3 onward" and telling turn 2 explicitly not to call
+  check_guess. (2) The turn-based clue ladder's "turn 5+: keep nudging for
+  another guess" instruction can fire on the exact same turn check_guess
+  returns `out_of_guesses` (3 guesses now lands around turn 5) — the LLM
+  sometimes gives one more hint instead of revealing immediately on that
+  turn, since it sometimes composes its reply before fully deferring to
+  the tool result — confirmed with a scripted text-only session rather
+  than assumed. The workflow itself is unaffected (it transitions to
+  `out_of_guesses` correctly the instant the 3rd guess lands, regardless
+  of what the agent says), and the existing rejection path in
+  `check_guess` ("the game's already over — reveal the answer and move
+  on", returned whenever a guess is submitted against a workflow that's
+  no longer `playing`) means the agent gets told the truth on its very
+  next tool call — so the game still always ends correctly on the backend
+  and the agent still always reveals and calls `end_call` eventually, just
+  sometimes a turn or two later than the ideal. Tried fixing the lag
+  itself by telling the agent to "call check_guess before deciding what
+  to say" — that made things worse (it started skipping check_guess
+  entirely for several turns) and was reverted. Left as a known minor
+  imperfection rather than risk another regression.
 - **2026-10-30: enabled the agent's built-in `end_call` system tool** to
   fix the Temporal kiosk never hanging up after a correct guess. The SDK's
   `Conversation` has no "agent finished speaking" callback — only text

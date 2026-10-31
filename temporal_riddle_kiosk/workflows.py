@@ -2,11 +2,11 @@
 One kid's riddle game, as a Temporal workflow.
 
 Each guess is a Workflow Update: a small, separately-recorded, synchronously-
-answered step in the workflow's durable history. The 5-guess cap is enforced
-by an Update validator (reject the 6th guess outright) instead of relying on
-the LLM's own turn-counting. The riddle is chosen once, inside the workflow,
-with workflow.random() — deterministic across replay, unlike random.choice()
-in a plain script.
+answered step in the workflow's durable history. The MAX_GUESSES cap is
+enforced by an Update validator (reject any guess past the cap outright)
+instead of relying on the LLM's own turn-counting. The riddle is chosen once,
+inside the workflow, with workflow.random() — deterministic across replay,
+unlike random.choice() in a plain script.
 """
 
 from __future__ import annotations

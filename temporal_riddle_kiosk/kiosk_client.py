@@ -55,6 +55,7 @@ import argparse
 import asyncio
 import concurrent.futures
 import os
+import random
 import sys
 import threading
 import time
@@ -68,7 +69,7 @@ from elevenlabs.conversational_ai.conversation import (
     ConversationInitiationData,
 )
 from elevenlabs.conversational_ai.default_audio_interface import DefaultAudioInterface
-from models import RIDDLE_POOL, RiddleDef, all_answer_words
+from models import MAX_GUESSES, RIDDLE_POOL, RiddleDef, all_answer_words
 from temporalio.client import Client, WorkflowHandle
 from workflows import RiddleGameWorkflow
 
@@ -98,10 +99,23 @@ RECORDINGS_DIR = Path(__file__).with_name("recordings")
 # kill`, cancel, a real failure) — that's meant to be immediate.
 WORKFLOW_END_GRACE_SECONDS = 8.0
 
-FIRST_MESSAGE = (
+# One is picked at random per kid (see build_config) so the line doesn't go
+# stale over a night of repeat greetings. Each one asks for the child's name
+# exactly once, matching the prompt's "ask once, never again" rule.
+FIRST_MESSAGES = [
     "[chuckles] Well, well... another landlubber washes up on me shore. "
-    "I be Captain Barnaby Bones! What be yer name, little matey?"
-)
+    "I be Captain Barnaby Bones! What be yer name, little matey?",
+    "[laughs] Shiver me timbers, a new face! I be Captain Barnaby Bones, "
+    "ghost of the seven seas. Tell me yer name, young buccaneer!",
+    "[whistles] Ahoy there! Captain Barnaby Bones at yer service, haunting "
+    "this here chest for one more Halloween. Who do I have the pleasure "
+    "of spookin' tonight?",
+    "[mischievously] Well if it isn't another brave soul... I be Captain "
+    "Barnaby Bones, and this be me ship for the evening! What should I "
+    "call ye, matey?",
+    "[excited] Arrr, a visitor! I be Captain Barnaby Bones, scourge of "
+    "the candy seas! What be yer name, friend?",
+]
 
 
 # --- Recording mic input + agent output to local WAV files -----------------
@@ -250,7 +264,7 @@ def build_config(riddle: RiddleDef) -> ConversationInitiationData:
         conversation_config_override={
             "agent": {
                 "prompt": {"prompt": prompt},
-                "first_message": FIRST_MESSAGE,
+                "first_message": random.choice(FIRST_MESSAGES),
             },
             "asr": {"keywords": all_answer_words()},
         },
@@ -280,7 +294,7 @@ def make_client_tools(bridge: TemporalBridge, handle: WorkflowHandle):
 
         print(
             f"  [check_guess] {guess!r} -> {result.outcome} "
-            f"({result.guesses_used}/5 guesses used)"
+            f"({result.guesses_used}/{MAX_GUESSES} guesses used)"
         )
 
         if result.outcome == "correct":

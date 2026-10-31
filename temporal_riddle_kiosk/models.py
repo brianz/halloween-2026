@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-MAX_GUESSES = 5
+MAX_GUESSES = 3
 
 RIDDLE_POOL: list[RiddleDef] = []  # populated below, after RiddleDef exists
 

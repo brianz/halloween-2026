@@ -22,11 +22,12 @@ to hand-roll or simply doesn't have:
   worker process dies mid-game, the next worker to pick it up resumes with
   every guess so far intact. The current kiosk's state lives only in a
   Python variable in a process that Ctrl-C kills outright.
-- **The 5-guess cap is real, enforced state — not turn-counting.** The
-  original prompt tracks "turn 2, turn 3, ... turn 6" and trusts the LLM to
-  count correctly and to only call `check_guess` on actual guesses. Here,
-  `submit_guess`'s **Update validator** flatly rejects a 6th guess; the cap
-  can't be talked around by chatter that doesn't look like a guess.
+- **The guess cap (MAX_GUESSES) is real, enforced state — not
+  turn-counting.** The original prompt tracks "turn 2, turn 3, ... turn 6"
+  and trusts the LLM to count correctly and to only call `check_guess` on
+  actual guesses. Here, `submit_guess`'s **Update validator** flatly
+  rejects any guess past the cap; it can't be talked around by chatter
+  that doesn't look like a guess.
 - **Live visibility into a running game.** `temporal workflow show
   --workflow-id riddle-game-...` or the local Web UI
   (http://localhost:8233) lets you watch a kid's game — riddle, guesses,
@@ -89,7 +90,7 @@ Temporal dev server (localhost:7233)
 - `pirate_riddle_prompt_temporal.txt` — same persona/clue-ladder as
   `../pirate_riddle_prompt.txt`, with one addition: an explicit
   `out_of_guesses` path, since the workflow (not turn-counting) now owns
-  the 5-guess limit.
+  the guess limit (MAX_GUESSES).
 
 ## Running it
 
