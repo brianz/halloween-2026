@@ -88,16 +88,17 @@ lives*, not how you run or control a session:
   `pirate_riddle_prompt.txt` too). The orchestrator closes the websocket,
   the SDK already treats that as a normal `end_session()` — no guessing
   about TTS timing — and `wait_for_session_end()` returns on its own.
-  `temporal_riddle_kiosk/kiosk_client.py` additionally has a background
-  watcher (`watch_for_workflow_end`) as a fallback for paths the agent has
-  no reason to call `end_call` for ("timed_out"/kid walked away,
-  "abandoned"/operator's Ctrl-C) or in case it ever forgets to; it waits
-  on `handle.result()` and ends the session, immediately on an abnormal
-  end (`just kill`), after a short grace period
-  (`WORKFLOW_END_GRACE_SECONDS`) on a clean finish.
-  `pirate_riddle_kiosk.py` has no separate orchestration layer to watch
-  this way, so it has no equivalent fallback — if the agent ever doesn't
-  call `end_call`, Ctrl-C is still the only way out, same as always.
+  Both scripts also have a background fallback watcher in case the agent
+  ever doesn't call `end_call`: `temporal_riddle_kiosk/kiosk_client.py`'s
+  `watch_for_workflow_end` waits on `handle.result()` and ends the session,
+  immediately on an abnormal end (`just kill`), after a short grace period
+  (`WORKFLOW_END_GRACE_SECONDS`) on a clean finish — it also covers paths
+  the agent has no reason to call `end_call` for at all ("timed_out"/kid
+  walked away, "abandoned"/operator's Ctrl-C). `pirate_riddle_kiosk.py`'s
+  `watch_for_game_end` is the same idea without Temporal: a daemon thread
+  polling local `state`, force-ending the session `END_CALL_GRACE_SECONDS`
+  after the outcome is decided if nothing else has by then (added
+  2026-10-30 after a real test hit exactly this gap — see gotchas).
   `pirate_prompt.txt` (password mode) still explicitly tells the agent
   never to call `end_call` — enabling the tool is agent-wide (see gotcha
   below), not per-script, and that script wasn't part of this change.
@@ -166,9 +167,18 @@ Raw: `.venv/bin/python pirate_kiosk.py` / `.venv/bin/python pirate_riddle_kiosk.
   the end of `__main__` and exits, no explicit `sys.exit()` needed.
   Confirmed by calling `run_kid_session()` directly in a scripted
   text-only session and timing how long it took to return with no Ctrl-C
-  sent. Unlike the Temporal kiosk, there's no background watcher here as
-  a fallback if the agent ever skips calling `end_call` — Ctrl-C remains
-  the only way out in that case, same as before this fix.
+  sent. **Update:** the "no fallback if the agent skips `end_call`" gap
+  noted here was real, not theoretical — a second real test hit it (the
+  agent revealed and said its send-off line, but never called `end_call`,
+  and nothing nudges it afterward since the kid has no reason to guess
+  again). Fixed by porting the Temporal kiosk's watcher pattern:
+  `watch_for_game_end` polls local `state` in a daemon thread and
+  force-ends the session if it's still open `END_CALL_GRACE_SECONDS`
+  (8s) after the outcome is decided. This also meant `end_call`, the
+  watcher, and Ctrl-C could now all reach `end_session()` on the same
+  session — guarded `run_kid_session`'s own call with
+  `if not session_ended.is_set()` so a second real call never hits an
+  already-closed pyaudio stream.
 - **2026-10-30: `worker.py` doesn't hot-reload** — it imports `models.py`/
   `workflows.py`/`activities.py` once at startup, so an edit to any of them
   (e.g. changing `MAX_GUESSES`) has no effect on games started against an
