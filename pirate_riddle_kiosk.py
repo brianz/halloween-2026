@@ -22,10 +22,14 @@ pirate_kiosk.py):
     string parameter "guess".
 
 Run:  .venv/bin/python pirate_riddle_kiosk.py [--record]
-Stop: Ctrl-C ends the session (next kid = run it again). If the process is
-      wedged and Ctrl-C in its own terminal won't land, `just kill-riddle-kiosk`
-      from a second terminal sends it the same SIGINT from the process id
-      this script drops in current_riddle_kiosk.pid at startup.
+Stop: the agent hangs up on its own once the game ends (correct guess or
+      out_of_guesses) via ElevenLabs' built-in end_call tool, and the script
+      exits right after — rerun it for the next kid. Ctrl-C still works as
+      a manual override (e.g. a kid who walks away mid-game). If the
+      process is wedged and Ctrl-C in its own terminal won't land,
+      `just kill-riddle-kiosk` from a second terminal sends it the same
+      SIGINT from the process id this script drops in
+      current_riddle_kiosk.pid at startup.
 
 Pass --record to write two local WAV files to recordings/ for the session —
 the kid's mic input and the Captain's TTS output, named by that session's
@@ -133,9 +137,8 @@ def pick_riddle() -> dict:
 
 def build_config(riddle: dict) -> ConversationInitiationData:
     prompt = Path(__file__).with_name("pirate_riddle_prompt.txt").read_text()
-    all_answer_words = [
-        word for r in RIDDLE_POOL for word in r["answer"].split()
-    ]
+    all_answer_words = [word for r in RIDDLE_POOL for word in r["answer"].split()]
+
     return ConversationInitiationData(
         dynamic_variables={"riddle": riddle["riddle"], "answer": riddle["answer"]},
         conversation_config_override={
@@ -188,13 +191,15 @@ def make_client_tools(answer: str):
         if state["outcome"] == "correct":
             return f"correct — the answer is {answer}. Reveal it now and celebrate!"
         if state["outcome"] == "out_of_guesses":
-            return "out_of_guesses — gently reveal the answer and send them to the chest."
+            return (
+                "out_of_guesses — gently reveal the answer and send them to the chest."
+            )
         remaining = MAX_GUESSES - len(state["guesses"])
         noun = "guess" if remaining == 1 else "guesses"
         return f"incorrect — {remaining} {noun} left, give the clue for this turn."
 
     tools.register("check_guess", check_guess)
-    return tools
+    return tools, state
 
 
 def _guess_correct(guess: str, answer: str) -> bool:
@@ -240,6 +245,7 @@ class RecordingAudioInterface(DefaultAudioInterface):
 
     def _in_callback(self, in_data, frame_count, time_info, status):
         self._mic_wav.writeframes(in_data)
+        self._agent_wav.writeframes(in_data)  # agent output is also fed to _in_callback
         return super()._in_callback(in_data, frame_count, time_info, status)
 
     def output(self, audio: bytes) -> None:
@@ -267,6 +273,8 @@ def run_kid_session(riddle: dict, record: bool = False) -> None:
     print(f"  [session] id {session_id!r}")
     CURRENT_SESSION_FILE.write_text(str(os.getpid()))
 
+    mic_path = agent_path = ""
+
     if record:
         RECORDINGS_DIR.mkdir(exist_ok=True)
         mic_path = RECORDINGS_DIR / f"{session_id}_mic.wav"
@@ -275,6 +283,7 @@ def run_kid_session(riddle: dict, record: bool = False) -> None:
     else:
         audio_interface = DefaultAudioInterface()
 
+    tools, state = make_client_tools(riddle["answer"])
     client = ElevenLabs(api_key=API_KEY)
     conversation = Conversation(
         client,
@@ -282,7 +291,7 @@ def run_kid_session(riddle: dict, record: bool = False) -> None:
         requires_auth=True,
         audio_interface=audio_interface,
         config=build_config(riddle),
-        client_tools=make_client_tools(riddle["answer"]),
+        client_tools=tools,
         callback_agent_response=lambda resp: print(f"☠ Captain: {resp}"),
         callback_user_transcript=lambda text: print(f"🧒 Kid: {text}"),
     )
@@ -296,6 +305,10 @@ def run_kid_session(riddle: dict, record: bool = False) -> None:
         if record:
             print(f"  [recording] mic:   {mic_path}")
             print(f"  [recording] agent: {agent_path}")
+        print(
+            f"  [session] outcome={state['outcome']!r} "
+            f"guesses={state['guesses']!r}"
+        )
 
 
 if __name__ == "__main__":
